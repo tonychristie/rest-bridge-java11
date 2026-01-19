@@ -1,0 +1,38 @@
+server:
+  port: 9877  # Different from dfc-bridge (9876)
+
+spring:
+  application:
+    name: rest-bridge
+
+# REST Bridge configuration
+rest-bridge:
+  # Default timeout for REST calls (seconds)
+  timeout-seconds: 30
+  # Session cleanup interval (milliseconds)
+  session-cleanup-interval-ms: 60000
+  # Session timeout (minutes)
+  session-timeout-minutes: 30
+
+# Actuator endpoints
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized
+
+# Logging
+logging:
+  level:
+    com.spire.restbridge: DEBUG
+    org.springframework.web.reactive.function.client: DEBUG
+
+# OpenAPI/Swagger
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
