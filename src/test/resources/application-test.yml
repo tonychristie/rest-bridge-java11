@@ -1,0 +1,10 @@
+spring:
+  main:
+    allow-bean-definition-overriding: true
+
+rest-bridge:
+  session:
+    timeout-minutes: 5
+    cleanup-interval-minutes: 1
+  request:
+    timeout-seconds: 10
