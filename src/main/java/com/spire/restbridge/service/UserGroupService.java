@@ -205,6 +205,130 @@ public class UserGroupService {
     }
 
     /**
+     * Get groups that contain a specific user.
+     * Uses /groups endpoint with user-name query parameter.
+     */
+    public List<GroupInfo> getGroupsForUser(String sessionId, String userName) {
+        log.debug("Getting groups for user {} via REST", userName);
+
+        RestSessionHolder session = sessionService.getSession(sessionId);
+
+        try {
+            List<GroupInfo> results = new ArrayList<>();
+            int page = 1;
+            boolean hasMore = true;
+
+            while (hasMore) {
+                final int currentPage = page;
+                @SuppressWarnings("unchecked")
+                Map<String, Object> response = session.getWebClient().get()
+                        .uri(uriBuilder -> uriBuilder.path("/repositories/{repo}/groups")
+                                .queryParam("inline", "true")
+                                .queryParam("items-per-page", "100")
+                                .queryParam("page", currentPage)
+                                .queryParam("user-name", userName)
+                                .build(session.getRepository()))
+                        .retrieve()
+                        .bodyToMono(Map.class)
+                        .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+
+                if (response == null) {
+                    break;
+                }
+
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> entries =
+                        (List<Map<String, Object>>) response.get("entries");
+
+                if (entries != null && !entries.isEmpty()) {
+                    for (Map<String, Object> entry : entries) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> content =
+                                (Map<String, Object>) entry.get("content");
+                        if (content != null) {
+                            results.add(extractGroupInfo(content));
+                        }
+                    }
+                }
+
+                hasMore = hasNextPage(response);
+                page++;
+            }
+
+            return results;
+
+        } catch (WebClientResponseException e) {
+            throw new RestBridgeException(ERROR_CODE,
+                    "Failed to get groups for user: " + e.getResponseBodyAsString(), e);
+        } catch (Exception e) {
+            throw new RestBridgeException(ERROR_CODE,
+                    "Failed to get groups for user: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Get parent groups that contain a specific group.
+     * Uses /groups endpoint with group-name query parameter.
+     */
+    public List<GroupInfo> getParentGroups(String sessionId, String groupName) {
+        log.debug("Getting parent groups for group {} via REST", groupName);
+
+        RestSessionHolder session = sessionService.getSession(sessionId);
+
+        try {
+            List<GroupInfo> results = new ArrayList<>();
+            int page = 1;
+            boolean hasMore = true;
+
+            while (hasMore) {
+                final int currentPage = page;
+                @SuppressWarnings("unchecked")
+                Map<String, Object> response = session.getWebClient().get()
+                        .uri(uriBuilder -> uriBuilder.path("/repositories/{repo}/groups")
+                                .queryParam("inline", "true")
+                                .queryParam("items-per-page", "100")
+                                .queryParam("page", currentPage)
+                                .queryParam("group-name", groupName)
+                                .build(session.getRepository()))
+                        .retrieve()
+                        .bodyToMono(Map.class)
+                        .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+
+                if (response == null) {
+                    break;
+                }
+
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> entries =
+                        (List<Map<String, Object>>) response.get("entries");
+
+                if (entries != null && !entries.isEmpty()) {
+                    for (Map<String, Object> entry : entries) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> content =
+                                (Map<String, Object>) entry.get("content");
+                        if (content != null) {
+                            results.add(extractGroupInfo(content));
+                        }
+                    }
+                }
+
+                hasMore = hasNextPage(response);
+                page++;
+            }
+
+            return results;
+
+        } catch (WebClientResponseException e) {
+            throw new RestBridgeException(ERROR_CODE,
+                    "Failed to get parent groups: " + e.getResponseBodyAsString(), e);
+        } catch (Exception e) {
+            throw new RestBridgeException(ERROR_CODE,
+                    "Failed to get parent groups: " + e.getMessage(), e);
+        }
+    }
+
+    /**
      * Get group by name using /groups/{name} endpoint.
      */
     public GroupInfo getGroup(String sessionId, String groupName) {

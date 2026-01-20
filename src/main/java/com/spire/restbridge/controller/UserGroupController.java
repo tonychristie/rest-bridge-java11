@@ -97,6 +97,44 @@ public class UserGroupController {
         return ResponseEntity.ok(groups);
     }
 
+    @GetMapping("/users/{userName}/groups")
+    @Operation(
+        summary = "Get groups for user",
+        description = "Gets the groups that contain this user. Uses native /groups endpoint with user-name filter."
+    )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "Groups retrieved",
+            content = @Content(array = @ArraySchema(schema = @Schema(implementation = GroupInfo.class)))
+        )
+    })
+    public ResponseEntity<List<GroupInfo>> getGroupsForUser(
+            @Parameter(description = "User name") @PathVariable String userName,
+            @Parameter(description = "Session ID") @RequestParam String sessionId) {
+        List<GroupInfo> groups = userGroupService.getGroupsForUser(sessionId, userName);
+        return ResponseEntity.ok(groups);
+    }
+
+    @GetMapping("/groups/{groupName}/parents")
+    @Operation(
+        summary = "Get parent groups",
+        description = "Gets the parent groups that contain this group. Uses native /groups endpoint with group-name filter."
+    )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "Parent groups retrieved",
+            content = @Content(array = @ArraySchema(schema = @Schema(implementation = GroupInfo.class)))
+        )
+    })
+    public ResponseEntity<List<GroupInfo>> getParentGroups(
+            @Parameter(description = "Group name") @PathVariable String groupName,
+            @Parameter(description = "Session ID") @RequestParam String sessionId) {
+        List<GroupInfo> groups = userGroupService.getParentGroups(sessionId, groupName);
+        return ResponseEntity.ok(groups);
+    }
+
     @GetMapping("/groups/{groupName}")
     @Operation(
         summary = "Get group",
