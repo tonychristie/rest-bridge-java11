@@ -2,7 +2,7 @@
 
 A Java Spring Boot microservice that provides a REST API bridge to Documentum REST Services endpoints.
 
-> **Note:** This is the **Java 11** version of REST Bridge, compatible with environments that cannot run Java 17+. For environments with Java 17+ support, use [rest-bridge](http://colossus:3000/tchristie/rest-bridge) instead.
+> **Note:** This is the **Java 11** version of REST Bridge, compatible with environments that cannot run Java 17+. For environments with Java 17+ support, use [rest-bridge](https://github.com/tonychristie/rest-bridge) instead.
 
 ## Overview
 
@@ -64,7 +64,7 @@ No DFC installation required - REST Bridge is a pure Java application.
 
 ```bash
 # Clone the repository
-git clone http://colossus:3000/tchristie/rest-bridge-java11.git
+git clone https://github.com/tonychristie/rest-bridge-java11.git
 cd rest-bridge-java11
 
 # Build with Maven
@@ -357,6 +357,6 @@ MIT License - see LICENSE file for details.
 
 ## Related Projects
 
-- [rest-bridge](http://colossus:3000/tchristie/rest-bridge) - Java 17 version of REST Bridge
-- [dfc-bridge](http://colossus:3000/tchristie/dfc-bridge) - DFC-based bridge for native Documentum access
-- [dctm-vscode](http://colossus:3000/tchristie/dctm-vscode) - VS Code extension for Documentum
+- [rest-bridge](https://github.com/tonychristie/rest-bridge) - Java 17 version of REST Bridge
+- [dfc-bridge](https://github.com/tonychristie/dfc-bridge) - DFC-based bridge for native Documentum access
+- [dctm-vscode](https://github.com/tonychristie/dctm-vscode) - VS Code extension for Documentum
