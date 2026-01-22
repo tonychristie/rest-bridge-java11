@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Reduced console output noise: disabled Spring banner, set logging to WARN/INFO levels
+- Added log file output to `logs/rest-bridge-java11.log`
+
 ### Added
 - Endpoint to get groups for a user: `GET /api/v1/users/{userName}/groups`
 - Endpoint to get parent groups for a group: `GET /api/v1/groups/{groupName}/parents`
