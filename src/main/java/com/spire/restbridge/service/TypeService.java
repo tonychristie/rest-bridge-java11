@@ -10,8 +10,11 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Service for type operations via Documentum REST Services.
@@ -42,19 +45,15 @@ public class TypeService {
         RestSessionHolder session = sessionService.getSession(sessionId);
 
         try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> response = session.getWebClient().get()
-                    .uri("/repositories/{repo}/types/{typeName}",
-                            session.getRepository(), typeName)
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
-
+            Map<String, Object> response = fetchTypeRaw(session, typeName);
             if (response == null) {
                 throw new ObjectNotFoundException("Type not found: " + typeName);
             }
 
-            return extractTypeInfo(response);
+            // Determine inherited attributes by fetching parent type's properties
+            Set<String> inheritedAttrNames = getInheritedAttributeNames(session, response);
+
+            return extractTypeInfo(response, inheritedAttrNames);
 
         } catch (WebClientResponseException.NotFound e) {
             throw new ObjectNotFoundException("Type not found: " + typeName);
@@ -66,6 +65,66 @@ public class TypeService {
         } catch (Exception e) {
             throw new RestBridgeException(ERROR_CODE,
                     "Failed to get type: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Fetch raw type data from REST API.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> fetchTypeRaw(RestSessionHolder session, String typeName) {
+        return session.getWebClient().get()
+                .uri("/repositories/{repo}/types/{typeName}",
+                        session.getRepository(), typeName)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+    }
+
+    /**
+     * Get the set of attribute names inherited from the parent type.
+     * Recursively fetches all ancestor types to build complete inherited attribute set.
+     */
+    @SuppressWarnings("unchecked")
+    private Set<String> getInheritedAttributeNames(RestSessionHolder session, Map<String, Object> typeResponse) {
+        String parentUrl = (String) typeResponse.get("parent");
+        if (parentUrl == null || parentUrl.isEmpty()) {
+            return Collections.emptySet();
+        }
+
+        // Extract parent type name from URL
+        int lastSlash = parentUrl.lastIndexOf('/');
+        if (lastSlash < 0 || lastSlash >= parentUrl.length() - 1) {
+            return Collections.emptySet();
+        }
+        String parentTypeName = parentUrl.substring(lastSlash + 1);
+
+        try {
+            Map<String, Object> parentResponse = fetchTypeRaw(session, parentTypeName);
+            if (parentResponse == null) {
+                return Collections.emptySet();
+            }
+
+            Set<String> inheritedNames = new HashSet<>();
+
+            // Add all parent's properties as inherited
+            List<Map<String, Object>> parentProps =
+                    (List<Map<String, Object>>) parentResponse.get("properties");
+            if (parentProps != null) {
+                for (Map<String, Object> prop : parentProps) {
+                    String name = (String) prop.get("name");
+                    if (name != null) {
+                        inheritedNames.add(name);
+                    }
+                }
+            }
+
+            log.debug("Type has {} inherited attributes from parent {}", inheritedNames.size(), parentTypeName);
+            return inheritedNames;
+
+        } catch (Exception e) {
+            log.debug("Could not fetch parent type {}: {}", parentTypeName, e.getMessage());
+            return Collections.emptySet();
         }
     }
 
@@ -114,7 +173,9 @@ public class TypeService {
                         Map<String, Object> content =
                                 (Map<String, Object>) entry.get("content");
                         if (content != null) {
-                            results.add(extractTypeInfo(content));
+                            // For list operations, fetch parent to determine inherited attrs
+                            Set<String> inheritedAttrNames = getInheritedAttributeNames(session, content);
+                            results.add(extractTypeInfo(content, inheritedAttrNames));
                         }
                     }
                 }
@@ -148,7 +209,7 @@ public class TypeService {
     }
 
     @SuppressWarnings("unchecked")
-    private TypeInfo extractTypeInfo(Map<String, Object> response) {
+    private TypeInfo extractTypeInfo(Map<String, Object> response, Set<String> inheritedAttrNames) {
         String name = (String) response.getOrDefault("name", "");
         String category = (String) response.getOrDefault("category", "");
 
@@ -179,11 +240,12 @@ public class TypeService {
                     length = ((Number) lengthObj).intValue();
                 }
 
-                boolean inherited = Boolean.TRUE.equals(prop.get("inherited")) ||
-                                   Boolean.TRUE.equals(prop.get("is_inherited"));
+                // Attribute is inherited if it exists in the parent type
+                String attrName = (String) prop.get("name");
+                boolean inherited = inheritedAttrNames.contains(attrName);
 
                 attributes.add(TypeInfo.AttributeInfo.builder()
-                        .name((String) prop.get("name"))
+                        .name(attrName)
                         .dataType((String) prop.get("type"))
                         .length(length)
                         .repeating(Boolean.TRUE.equals(prop.get("repeating")))
