@@ -702,7 +702,7 @@ public class ObjectService {
         op1.put("id", "checkin");
         Map<String, Object> req1 = new HashMap<>();
         req1.put("method", "POST");
-        req1.put("uri", "/repositories/" + repository + "/objects/" + objectId + "/versions");
+        req1.put("uri", "/repositories/" + repository + "/objects/" + objectId + "/versions?object-id=" + objectId);
         if (entityJson != null) {
             req1.put("entity", entityJson);
             List<Map<String, Object>> headers = new ArrayList<>();
