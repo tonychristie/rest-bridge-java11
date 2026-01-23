@@ -16,9 +16,9 @@ import java.util.Map;
 public class StatusController {
 
     @GetMapping("/health")
-    @Operation(summary = "Health check", description = "Returns UP if the service is running")
+    @Operation(summary = "Health check", description = "Returns ok if the service is running")
     public ResponseEntity<Map<String, String>> health() {
-        return ResponseEntity.ok(Map.of("status", "UP"));
+        return ResponseEntity.ok(Map.of("status", "ok"));
     }
 
     @GetMapping("/api/v1/status")
