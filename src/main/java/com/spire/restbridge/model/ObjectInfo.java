@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -20,4 +21,19 @@ public class ObjectInfo {
     private String type;
     private String name;
     private Map<String, Object> attributes;
+
+    /**
+     * User's permission level on this object (null for non-sysobject types).
+     */
+    private Integer permissionLevel;
+
+    /**
+     * Human-readable permission label.
+     */
+    private String permissionLabel;
+
+    /**
+     * Extended permissions (if any).
+     */
+    private List<String> extendedPermissions;
 }
