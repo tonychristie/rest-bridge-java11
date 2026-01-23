@@ -5,14 +5,18 @@ import com.spire.restbridge.dto.UpdateObjectRequest;
 import com.spire.restbridge.exception.ObjectNotFoundException;
 import com.spire.restbridge.exception.RestBridgeException;
 import com.spire.restbridge.model.ObjectInfo;
-import com.spire.restbridge.model.TypeInfo;
+import com.spire.restbridge.util.PermissionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,33 +39,38 @@ public class ObjectService {
     private static final int TIMEOUT_SECONDS = 30;
 
     private final SessionService sessionService;
+    private final ObjectMapper objectMapper;
 
-    public ObjectService(SessionService sessionService) {
+    public ObjectService(SessionService sessionService, ObjectMapper objectMapper) {
         this.sessionService = sessionService;
+        this.objectMapper = objectMapper;
     }
 
     /**
-     * Get an object by ID using /objects/{id} endpoint.
+     * Get an object by ID using batch API to fetch object and permissions in one request.
      */
     public ObjectInfo getObject(String sessionId, String objectId) {
-        log.debug("Getting object {} via REST", objectId);
+        log.debug("Getting object {} via REST batch", objectId);
 
         RestSessionHolder session = sessionService.getSession(sessionId);
 
         try {
+            Map<String, Object> batchRequest = buildObjectPermissionsBatchRequest(
+                    session.getRepository(), objectId);
+
             @SuppressWarnings("unchecked")
-            Map<String, Object> response = session.getWebClient().get()
-                    .uri("/repositories/{repo}/objects/{objectId}",
-                            session.getRepository(), objectId)
+            Map<String, Object> batchResponse = session.getWebClient().post()
+                    .uri("/repositories/{repo}/batches", session.getRepository())
+                    .bodyValue(batchRequest)
                     .retrieve()
                     .bodyToMono(Map.class)
                     .block(Duration.ofSeconds(TIMEOUT_SECONDS));
 
-            if (response == null) {
+            if (batchResponse == null) {
                 throw new ObjectNotFoundException(objectId);
             }
 
-            return extractObjectInfo(response);
+            return extractFromBatchResponse(batchResponse, objectId);
 
         } catch (WebClientResponseException.NotFound e) {
             throw new ObjectNotFoundException(objectId);
@@ -186,7 +195,9 @@ public class ObjectService {
                 throw new RestBridgeException(ERROR_CODE, "No response from update");
             }
 
-            return extractObjectInfo(response);
+            ObjectInfo objectInfo = extractObjectInfo(response);
+            populatePermissions(session, objectInfo);
+            return objectInfo;
 
         } catch (WebClientResponseException.NotFound e) {
             throw new ObjectNotFoundException(objectId);
@@ -222,7 +233,9 @@ public class ObjectService {
                 throw new RestBridgeException(ERROR_CODE, "No response from checkout");
             }
 
-            return extractObjectInfo(response);
+            ObjectInfo objectInfo = extractObjectInfo(response);
+            populatePermissions(session, objectInfo);
+            return objectInfo;
 
         } catch (WebClientResponseException.NotFound e) {
             throw new ObjectNotFoundException(objectId);
@@ -293,7 +306,9 @@ public class ObjectService {
                 throw new RestBridgeException(ERROR_CODE, "No response from checkin");
             }
 
-            return extractObjectInfo(response);
+            ObjectInfo objectInfo = extractObjectInfo(response);
+            populatePermissions(session, objectInfo);
+            return objectInfo;
 
         } catch (WebClientResponseException.NotFound e) {
             throw new ObjectNotFoundException(objectId);
@@ -365,7 +380,9 @@ public class ObjectService {
                 throw new RestBridgeException(ERROR_CODE, "No response from create");
             }
 
-            return extractObjectInfo(response);
+            ObjectInfo objectInfo = extractObjectInfo(response);
+            populatePermissions(session, objectInfo);
+            return objectInfo;
 
         } catch (WebClientResponseException e) {
             throw new RestBridgeException(ERROR_CODE,
@@ -502,5 +519,165 @@ public class ObjectService {
                 .type(type)
                 .name(title)
                 .build();
+    }
+
+    /**
+     * Fetch permission information for an object and populate it in the ObjectInfo.
+     */
+    private void populatePermissions(RestSessionHolder session, ObjectInfo objectInfo) {
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> response = session.getWebClient().get()
+                    .uri("/repositories/{repo}/objects/{objectId}/permissions",
+                            session.getRepository(), objectInfo.getObjectId())
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+
+            if (response != null) {
+                extractPermissionInfo(response, objectInfo);
+            }
+        } catch (WebClientResponseException.NotFound e) {
+            // Object may not support permissions (non-sysobject)
+            log.debug("No permissions available for object {}", objectInfo.getObjectId());
+        } catch (Exception e) {
+            // Log but don't fail - permissions are supplementary info
+            log.warn("Failed to fetch permissions for {}: {}", objectInfo.getObjectId(), e.getMessage());
+        }
+    }
+
+    /**
+     * Extract permission information from the REST API response.
+     */
+    @SuppressWarnings("unchecked")
+    private void extractPermissionInfo(Map<String, Object> response, ObjectInfo objectInfo) {
+        // The REST API returns the current user's permission directly
+        Integer basicPermission = null;
+        String permissionLabel = null;
+        List<String> extendedPermissions = new ArrayList<>();
+
+        // Check for basic-permission in root response
+        // REST API returns this as a string label (e.g., "Delete", "Write")
+        Object basicPerm = response.get("basic-permission");
+        if (basicPerm instanceof String) {
+            permissionLabel = (String) basicPerm;
+            basicPermission = PermissionUtils.labelToPermit(permissionLabel);
+            if (basicPermission < 0) {
+                basicPermission = null;
+            }
+        } else if (basicPerm instanceof Number) {
+            basicPermission = ((Number) basicPerm).intValue();
+            permissionLabel = PermissionUtils.permitToLabel(basicPermission);
+        }
+
+        // Check for extend-permissions (comma-separated string)
+        Object extendPerm = response.get("extend-permissions");
+        if (extendPerm instanceof String && !((String) extendPerm).isEmpty()) {
+            String[] parts = ((String) extendPerm).split(",");
+            for (String part : parts) {
+                String trimmed = part.trim();
+                if (!trimmed.isEmpty()) {
+                    extendedPermissions.add(trimmed);
+                }
+            }
+        }
+
+        if (basicPermission != null) {
+            objectInfo.setPermissionLevel(basicPermission);
+            objectInfo.setPermissionLabel(permissionLabel != null ?
+                    permissionLabel.toUpperCase() : PermissionUtils.permitToLabel(basicPermission));
+        }
+
+        objectInfo.setExtendedPermissions(extendedPermissions.isEmpty() ?
+                Collections.emptyList() : extendedPermissions);
+    }
+
+    /**
+     * Build a batch request to fetch object and permissions in one call.
+     */
+    private Map<String, Object> buildObjectPermissionsBatchRequest(String repository, String objectId) {
+        Map<String, Object> batch = new HashMap<>();
+        batch.put("transactional", false);
+        batch.put("sequential", false);
+        batch.put("on-error", "CONTINUE");
+
+        List<Map<String, Object>> operations = new ArrayList<>();
+
+        // Operation 1: Get object
+        Map<String, Object> op1 = new HashMap<>();
+        op1.put("id", "getObject");
+        Map<String, Object> req1 = new HashMap<>();
+        req1.put("method", "GET");
+        req1.put("uri", "/repositories/" + repository + "/objects/" + objectId);
+        op1.put("request", req1);
+        operations.add(op1);
+
+        // Operation 2: Get permissions
+        Map<String, Object> op2 = new HashMap<>();
+        op2.put("id", "getPermissions");
+        Map<String, Object> req2 = new HashMap<>();
+        req2.put("method", "GET");
+        req2.put("uri", "/repositories/" + repository + "/objects/" + objectId + "/permissions");
+        op2.put("request", req2);
+        operations.add(op2);
+
+        batch.put("operations", operations);
+        return batch;
+    }
+
+    /**
+     * Extract ObjectInfo and permissions from a batch response.
+     */
+    @SuppressWarnings("unchecked")
+    private ObjectInfo extractFromBatchResponse(Map<String, Object> batchResponse, String objectId) {
+        List<Map<String, Object>> operations =
+                (List<Map<String, Object>>) batchResponse.get("operations");
+
+        if (operations == null || operations.isEmpty()) {
+            throw new ObjectNotFoundException(objectId);
+        }
+
+        ObjectInfo objectInfo = null;
+
+        for (Map<String, Object> operation : operations) {
+            String opId = (String) operation.get("id");
+            Map<String, Object> response = (Map<String, Object>) operation.get("response");
+
+            if (response == null) {
+                continue;
+            }
+
+            Integer status = (Integer) response.get("status");
+            String entity = (String) response.get("entity");
+
+            if ("getObject".equals(opId)) {
+                if (status != null && status == 404) {
+                    throw new ObjectNotFoundException(objectId);
+                }
+                if (entity != null && status != null && status == 200) {
+                    try {
+                        Map<String, Object> objectData = objectMapper.readValue(entity, Map.class);
+                        objectInfo = extractObjectInfo(objectData);
+                    } catch (JsonProcessingException e) {
+                        log.warn("Failed to parse object response: {}", e.getMessage());
+                    }
+                }
+            } else if ("getPermissions".equals(opId) && objectInfo != null) {
+                if (entity != null && status != null && status == 200) {
+                    try {
+                        Map<String, Object> permData = objectMapper.readValue(entity, Map.class);
+                        extractPermissionInfo(permData, objectInfo);
+                    } catch (JsonProcessingException e) {
+                        log.warn("Failed to parse permissions response: {}", e.getMessage());
+                    }
+                }
+            }
+        }
+
+        if (objectInfo == null) {
+            throw new ObjectNotFoundException(objectId);
+        }
+
+        return objectInfo;
     }
 }
