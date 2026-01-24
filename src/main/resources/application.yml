@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: rest-bridge
+  main:
+    banner-mode: off
 
 # REST Bridge configuration
 rest-bridge:
@@ -24,11 +26,18 @@ management:
     health:
       show-details: when-authorized
 
-# Logging
+# Logging - quiet by default, enable debug via --logging.level.com.spire.restbridge=DEBUG
 logging:
   level:
-    com.spire.restbridge: DEBUG
-    org.springframework.web.reactive.function.client: DEBUG
+    root: WARN
+    com.spire.restbridge: INFO
+    org.springframework: WARN
+    org.apache.tomcat: WARN
+  file:
+    name: logs/rest-bridge-java11.log
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level %logger{20} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
 
 # OpenAPI/Swagger
 springdoc:

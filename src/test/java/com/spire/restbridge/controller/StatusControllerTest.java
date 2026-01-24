@@ -21,13 +21,13 @@ class StatusControllerTest {
     }
 
     @Test
-    void health_returnsUp() {
+    void health_returnsOk() {
         ResponseEntity<Map<String, String>> response = statusController.health();
 
         assertEquals(200, response.getStatusCode().value());
         Map<String, String> body = response.getBody();
         assertNotNull(body);
-        assertEquals("UP", body.get("status"));
+        assertEquals("ok", body.get("status"));
     }
 
     @Test
