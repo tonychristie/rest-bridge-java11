@@ -173,9 +173,9 @@ public class TypeService {
                         Map<String, Object> content =
                                 (Map<String, Object>) entry.get("content");
                         if (content != null) {
-                            // For list operations, fetch parent to determine inherited attrs
-                            Set<String> inheritedAttrNames = getInheritedAttributeNames(session, content);
-                            results.add(extractTypeInfo(content, inheritedAttrNames));
+                            // Skip inherited attr calculation - redundant for list view
+                            // (TypeCache ignores them, getTypeInfo() recalculates on demand)
+                            results.add(extractTypeInfo(content, Collections.emptySet()));
                         }
                     }
                 }
