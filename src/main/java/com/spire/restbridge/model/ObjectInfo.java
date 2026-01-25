@@ -20,7 +20,7 @@ public class ObjectInfo {
     private String objectId;
     private String type;
     private String name;
-    private Map<String, Object> attributes;
+    private Map<String, AttributeValue> attributes;
 
     /**
      * User's permission level on this object (null for non-sysobject types).
