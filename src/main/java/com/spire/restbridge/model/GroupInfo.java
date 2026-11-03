@@ -1,5 +1,6 @@
 package com.spire.restbridge.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -21,7 +22,13 @@ public class GroupInfo {
     private String description;
     private String groupClass;
     private String groupAdmin;
+    private String ownerName;
+    private String groupAddress;
+    private String groupSource;
+    @JsonProperty("isPrivate")
     private boolean isPrivate;
+    @JsonProperty("isDynamic")
+    private boolean isDynamic;
     private List<String> usersNames;
     private List<String> groupsNames;
 }
