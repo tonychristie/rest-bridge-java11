@@ -421,7 +421,11 @@ public class UserGroupService {
                 .description((String) properties.getOrDefault("description", ""))
                 .groupClass((String) properties.getOrDefault("group_class", ""))
                 .groupAdmin((String) properties.getOrDefault("group_admin", ""))
+                .ownerName((String) properties.getOrDefault("owner_name", ""))
+                .groupAddress((String) properties.getOrDefault("group_address", ""))
+                .groupSource((String) properties.getOrDefault("group_source", ""))
                 .isPrivate(Boolean.TRUE.equals(properties.get("is_private")))
+                .isDynamic(Boolean.TRUE.equals(properties.get("is_dynamic")))
                 .usersNames(usersNames)
                 .groupsNames(groupsNames)
                 .build();

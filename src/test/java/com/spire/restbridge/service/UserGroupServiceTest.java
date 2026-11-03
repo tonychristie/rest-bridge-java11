@@ -1,10 +1,16 @@
 package com.spire.restbridge.service;
 
 import com.spire.restbridge.exception.SessionNotFoundException;
+import com.spire.restbridge.model.GroupInfo;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.springframework.web.reactive.function.client.WebClient;
+
+import java.io.IOException;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -103,5 +109,34 @@ class UserGroupServiceTest {
         assertThrows(SessionNotFoundException.class, () -> {
             userGroupService.getParentGroups("invalid-session", "childgroup");
         });
+    }
+
+    @Test
+    void getGroup_readsPrivateDynamicOwnerAddressAndSource() throws IOException {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"properties\": {"
+                            + "\"group_name\": \"testgroup\","
+                            + "\"is_private\": true,"
+                            + "\"is_dynamic\": true,"
+                            + "\"owner_name\": \"dmadmin\","
+                            + "\"group_address\": \"group@example.com\","
+                            + "\"group_source\": \"LDAP\"}}"));
+            server.start();
+
+            RestSessionHolder session = new RestSessionHolder();
+            session.setRepository("testrepo");
+            session.setWebClient(WebClient.create(server.url("/").toString()));
+            when(sessionService.getSession("session-1")).thenReturn(session);
+
+            GroupInfo group = userGroupService.getGroup("session-1", "testgroup");
+
+            assertTrue(group.isPrivate());
+            assertTrue(group.isDynamic());
+            assertEquals("dmadmin", group.getOwnerName());
+            assertEquals("group@example.com", group.getGroupAddress());
+            assertEquals("LDAP", group.getGroupSource());
+        }
     }
 }
