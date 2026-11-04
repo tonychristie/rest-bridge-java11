@@ -2,7 +2,7 @@
 
 A Java Spring Boot microservice that provides a REST API bridge to Documentum REST Services endpoints.
 
-> **Note:** This is the **Java 11** version of REST Bridge, compatible with environments that cannot run Java 17+. For environments with Java 17+ support, use [rest-bridge](https://github.com/tonychristie/rest-bridge) instead.
+> **Note:** This is the **Java 11** version of REST Bridge, compatible with environments that cannot run Java 17+. For environments with Java 17+ support, use [rest-bridge](http://colossus:3000/tchristie/rest-bridge) instead.
 
 ## Overview
 
@@ -64,7 +64,7 @@ No DFC installation required - REST Bridge is a pure Java application.
 
 ```bash
 # Clone the repository
-git clone https://github.com/tonychristie/rest-bridge-java11.git
+git clone http://colossus:3000/tchristie/rest-bridge-java11.git
 cd rest-bridge-java11
 
 # Build with Maven
@@ -152,9 +152,19 @@ Once running, access the Swagger UI at:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/v1/objects/{id}` | Get object by r_object_id |
-| PUT | `/api/v1/objects/{id}` | Update object attributes |
+| POST | `/api/v1/objects/{id}` | Update object attributes |
+| POST | `/api/v1/objects` | Create object |
+| DELETE | `/api/v1/objects/{id}` | Delete object (`allVersions=true` deletes all versions) |
 | GET | `/api/v1/cabinets` | List cabinets |
-| GET | `/api/v1/folders/{id}/objects` | List folder contents |
+| GET | `/api/v1/objects/{id}/contents` | List folder contents |
+
+### Version Control Operations
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| PUT | `/api/v1/objects/{id}/lock` | Check out object |
+| DELETE | `/api/v1/objects/{id}/lock` | Cancel checkout |
+| POST | `/api/v1/objects/{id}/versions` | Check in object (optional `versionLabel`, default `CURRENT`) |
 
 ### Type Operations
 
@@ -169,8 +179,10 @@ Once running, access the Swagger UI at:
 |--------|----------|-------------|
 | GET | `/api/v1/users` | List users |
 | GET | `/api/v1/users/{userName}` | Get user info |
+| GET | `/api/v1/users/{userName}/groups` | List groups that contain the user |
 | GET | `/api/v1/groups` | List groups |
 | GET | `/api/v1/groups/{groupName}` | Get group info |
+| GET | `/api/v1/groups/{groupName}/parents` | List groups that contain the group |
 
 > **Note:** User and group operations use native REST endpoints (`/users`, `/groups`) instead of DQL, making them available even when DQL is disabled.
 
@@ -256,7 +268,7 @@ curl http://localhost:9877/health
 Response:
 ```json
 {
-  "status": "UP"
+  "status": "ok"
 }
 ```
 
@@ -357,6 +369,6 @@ MIT License - see LICENSE file for details.
 
 ## Related Projects
 
-- [rest-bridge](https://github.com/tonychristie/rest-bridge) - Java 17 version of REST Bridge
-- [dfc-bridge](https://github.com/tonychristie/dfc-bridge) - DFC-based bridge for native Documentum access
-- [dctm-vscode](https://github.com/tonychristie/dctm-vscode) - VS Code extension for Documentum
+- [rest-bridge](http://colossus:3000/tchristie/rest-bridge) - Java 17 version of REST Bridge
+- [dfc-bridge](http://colossus:3000/tchristie/dfc-bridge) - DFC-based bridge for native Documentum access
+- [dctm-vscode](http://colossus:3000/tchristie/dctm-vscode) - VS Code extension for Documentum
