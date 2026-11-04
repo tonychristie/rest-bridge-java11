@@ -2,9 +2,11 @@ package com.spire.restbridge.controller;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.info.BuildProperties;
 import org.springframework.http.ResponseEntity;
 
 import java.util.Map;
+import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -17,7 +19,9 @@ class StatusControllerTest {
 
     @BeforeEach
     void setUp() {
-        statusController = new StatusController();
+        Properties properties = new Properties();
+        properties.setProperty("version", "2.3.4");
+        statusController = new StatusController(new BuildProperties(properties));
     }
 
     @Test
@@ -39,7 +43,7 @@ class StatusControllerTest {
         assertNotNull(body);
         assertEquals("rest-bridge", body.get("service"));
         assertEquals("REST", body.get("backend"));
-        assertNotNull(body.get("version"));
+        assertEquals("2.3.4", body.get("version"));
     }
 
     @Test
