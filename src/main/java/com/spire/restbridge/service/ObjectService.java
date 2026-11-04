@@ -585,11 +585,6 @@ public class ObjectService {
     }
 
     @SuppressWarnings("unchecked")
-    private ObjectInfo extractObjectInfo(Map<String, Object> response) {
-        return extractObjectInfoWithSession(response, null);
-    }
-
-    @SuppressWarnings("unchecked")
     private ObjectInfo extractObjectInfoWithSession(Map<String, Object> response, String sessionId) {
         Map<String, Object> content = (Map<String, Object>) response.get("content");
         if (content == null) {

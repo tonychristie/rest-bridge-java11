@@ -100,13 +100,9 @@ public class SessionService {
             RestSessionHolder holder = new RestSessionHolder();
             holder.setWebClient(webClient);
             holder.setRepository(request.getRepository());
-            holder.setUsername(request.getUsername());
-            holder.setPassword(request.getPassword());
-            holder.setEndpoint(endpoint);
             holder.setDqlChecked(null); // Will check on first DQL request
             holder.setSessionInfo(SessionInfo.builder()
                     .sessionId(sessionId)
-                    .connected(true)
                     .repository(request.getRepository())
                     .user(request.getUsername())
                     .endpoint(endpoint)
