@@ -12,9 +12,6 @@ public class RestSessionHolder {
 
     private WebClient webClient;
     private String repository;
-    private String username;
-    private String password;
-    private String endpoint;
     private SessionInfo sessionInfo;
     private boolean dqlAvailable;
     private Boolean dqlChecked;

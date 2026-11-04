@@ -518,26 +518,18 @@ public class ObjectService {
      */
     @SuppressWarnings("unchecked")
     private String getObjectType(RestSessionHolder session, String objectId) {
-        try {
-            Map<String, Object> response = session.getWebClient().get()
-                    .uri("/repositories/{repo}/objects/{objectId}",
-                            session.getRepository(), objectId)
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+        Map<String, Object> response = session.getWebClient().get()
+                .uri("/repositories/{repo}/objects/{objectId}?view=r_object_type&links=false",
+                        session.getRepository(), objectId)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .block(Duration.ofSeconds(TIMEOUT_SECONDS));
 
-            if (response != null) {
-                Map<String, Object> properties = (Map<String, Object>) response.get("properties");
-                if (properties != null) {
-                    return (String) properties.getOrDefault("r_object_type", "dm_sysobject");
-                }
-            }
-            return "dm_sysobject";
-        } catch (Exception e) {
-            log.warn("Failed to get object type for {}, defaulting to dm_sysobject: {}",
-                    objectId, e.getMessage());
-            return "dm_sysobject";
+        if (response == null) {
+            throw new RestBridgeException(ERROR_CODE, "No response from object type lookup");
         }
+        Map<String, Object> properties = (Map<String, Object>) response.get("properties");
+        return (String) properties.get("r_object_type");
     }
 
     /**
@@ -582,11 +574,6 @@ public class ObjectService {
         }
 
         return normalized;
-    }
-
-    @SuppressWarnings("unchecked")
-    private ObjectInfo extractObjectInfo(Map<String, Object> response) {
-        return extractObjectInfoWithSession(response, null);
     }
 
     @SuppressWarnings("unchecked")
