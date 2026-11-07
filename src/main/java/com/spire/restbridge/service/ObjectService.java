@@ -311,42 +311,49 @@ public class ObjectService {
     }
 
     /**
-     * Checkin an object using batch API to POST version + GET permissions in one request.
+     * Check in a checked-out object as a new version of its chronicle.
+     * The new version has a new object ID, so permissions are read for that ID.
      */
     public ObjectInfo checkin(String sessionId, String objectId, String versionLabel) {
-        log.debug("Checking in object {} via REST batch with label {}", objectId, versionLabel);
+        log.debug("Checking in object {} via REST with label {}", objectId, versionLabel);
 
         RestSessionHolder session = sessionService.getSession(sessionId);
 
         try {
-            Map<String, Object> payload = new HashMap<>();
-            if (versionLabel != null && !versionLabel.isEmpty()) {
-                Map<String, Object> properties = new HashMap<>();
-                // r_version_label is a repeating attribute, must be sent as a list
-                properties.put("r_version_label", Collections.singletonList(versionLabel));
-                payload.put("properties", properties);
-            }
+            String chronicleId = getChronicleId(session, objectId);
 
-            String payloadJson = objectMapper.writeValueAsString(payload);
+            // REST Services rejects version-label=CURRENT; the new version gets CURRENT anyway
+            boolean sendLabel = versionLabel != null && !versionLabel.isBlank()
+                    && !"CURRENT".equals(versionLabel);
 
-            // Note: checkin creates a new version which may have a different object ID
-            // We fetch permissions for the new object returned by the checkin operation
-            Map<String, Object> batchRequest = buildCheckinBatchRequest(
-                    session.getRepository(), objectId, payloadJson);
+            Map<String, Object> uriVariables = new HashMap<>();
+            uriVariables.put("repo", session.getRepository());
+            uriVariables.put("chronicleId", chronicleId);
+            uriVariables.put("objectId", objectId);
+            uriVariables.put("versionLabel", versionLabel);
 
             @SuppressWarnings("unchecked")
-            Map<String, Object> batchResponse = session.getWebClient().post()
-                    .uri("/repositories/{repo}/batches", session.getRepository())
-                    .bodyValue(batchRequest)
+            Map<String, Object> response = session.getWebClient().post()
+                    .uri(uriBuilder -> {
+                        uriBuilder.path("/repositories/{repo}/objects/{chronicleId}/versions")
+                                .queryParam("object-id", "{objectId}");
+                        if (sendLabel) {
+                            uriBuilder.queryParam("version-label", "{versionLabel}");
+                        }
+                        return uriBuilder.build(uriVariables);
+                    })
+                    .bodyValue(Collections.emptyMap())
                     .retrieve()
                     .bodyToMono(Map.class)
                     .block(Duration.ofSeconds(TIMEOUT_SECONDS));
 
-            if (batchResponse == null) {
+            if (response == null) {
                 throw new RestBridgeException(ERROR_CODE, "No response from checkin");
             }
 
-            return extractFromCheckinBatchResponse(batchResponse, objectId, session, sessionId);
+            ObjectInfo objectInfo = extractObjectInfoWithSession(response, sessionId);
+            populatePermissions(session, objectInfo);
+            return objectInfo;
 
         } catch (WebClientResponseException.NotFound e) {
             throw new ObjectNotFoundException(objectId);
@@ -530,6 +537,26 @@ public class ObjectService {
         }
         Map<String, Object> properties = (Map<String, Object>) response.get("properties");
         return (String) properties.get("r_object_type");
+    }
+
+    /**
+     * Get the chronicle ID for an object by ID.
+     * Checkin posts to the chronicle, with the checked-out version as object-id.
+     */
+    @SuppressWarnings("unchecked")
+    private String getChronicleId(RestSessionHolder session, String objectId) {
+        Map<String, Object> response = session.getWebClient().get()
+                .uri("/repositories/{repo}/objects/{objectId}?view=i_chronicle_id&links=false",
+                        session.getRepository(), objectId)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+
+        if (response == null) {
+            throw new RestBridgeException(ERROR_CODE, "No response from chronicle id lookup");
+        }
+        Map<String, Object> properties = (Map<String, Object>) response.get("properties");
+        return (String) properties.get("i_chronicle_id");
     }
 
     /**
@@ -923,43 +950,6 @@ public class ObjectService {
     }
 
     /**
-     * Build a batch request for checkin operation.
-     * Checkin only includes the POST - permissions must be fetched separately
-     * since the new version may have a different object ID.
-     */
-    private Map<String, Object> buildCheckinBatchRequest(
-            String repository, String objectId, String entityJson) {
-
-        Map<String, Object> batch = new HashMap<>();
-        batch.put("transactional", false);
-        batch.put("sequential", false);
-        batch.put("on-error", "CONTINUE");
-
-        List<Map<String, Object>> operations = new ArrayList<>();
-
-        // Operation 1: Checkin (creates new version)
-        Map<String, Object> op1 = new HashMap<>();
-        op1.put("id", "checkin");
-        Map<String, Object> req1 = new HashMap<>();
-        req1.put("method", "POST");
-        req1.put("uri", "/repositories/" + repository + "/objects/" + objectId + "/versions?object-id=" + objectId);
-        if (entityJson != null) {
-            req1.put("entity", entityJson);
-            List<Map<String, Object>> headers = new ArrayList<>();
-            Map<String, Object> contentTypeHeader = new HashMap<>();
-            contentTypeHeader.put("name", "Content-Type");
-            contentTypeHeader.put("value", "application/vnd.emc.documentum+json");
-            headers.add(contentTypeHeader);
-            req1.put("headers", headers);
-        }
-        op1.put("request", req1);
-        operations.add(op1);
-
-        batch.put("operations", operations);
-        return batch;
-    }
-
-    /**
      * Extract ObjectInfo and permissions from a batch response.
      */
     @SuppressWarnings("unchecked")
@@ -1075,65 +1065,6 @@ public class ObjectService {
         if (objectInfo == null) {
             throw new RestBridgeException(ERROR_CODE, "No valid response from write operation");
         }
-
-        return objectInfo;
-    }
-
-    /**
-     * Extract ObjectInfo from checkin batch response.
-     * Checkin creates a new version which may have a different object ID,
-     * so we fetch permissions separately for the new object.
-     */
-    @SuppressWarnings("unchecked")
-    private ObjectInfo extractFromCheckinBatchResponse(
-            Map<String, Object> batchResponse, String originalObjectId, RestSessionHolder session,
-            String sessionId) {
-
-        List<Map<String, Object>> operations =
-                (List<Map<String, Object>>) batchResponse.get("operations");
-
-        if (operations == null || operations.isEmpty()) {
-            throw new ObjectNotFoundException(originalObjectId);
-        }
-
-        ObjectInfo objectInfo = null;
-
-        for (Map<String, Object> operation : operations) {
-            String opId = (String) operation.get("id");
-            Map<String, Object> response = (Map<String, Object>) operation.get("response");
-
-            if (response == null) {
-                continue;
-            }
-
-            Integer status = (Integer) response.get("status");
-            String entity = (String) response.get("entity");
-
-            if ("checkin".equals(opId)) {
-                if (status != null && status == 404) {
-                    throw new ObjectNotFoundException(originalObjectId);
-                }
-                if (status != null && status >= 400) {
-                    throw new RestBridgeException(ERROR_CODE,
-                            "Checkin failed with status " + status + ": " + entity);
-                }
-                if (entity != null && status != null && (status == 200 || status == 201)) {
-                    try {
-                        Map<String, Object> objectData = objectMapper.readValue(entity, Map.class);
-                        objectInfo = extractObjectInfoWithSession(objectData, sessionId);
-                    } catch (JsonProcessingException e) {
-                        log.warn("Failed to parse checkin response: {}", e.getMessage());
-                    }
-                }
-            }
-        }
-
-        if (objectInfo == null) {
-            throw new RestBridgeException(ERROR_CODE, "No valid response from checkin operation");
-        }
-
-        // Fetch permissions for the new version (may have different object ID)
-        populatePermissions(session, objectInfo);
 
         return objectInfo;
     }
