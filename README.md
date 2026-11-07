@@ -99,12 +99,29 @@ export SERVER_PORT=8080
 java -jar target/rest-bridge-1.4.0.jar
 ```
 
+### Listening Address
+
+The bridge listens on **127.0.0.1** only, so only the local machine can reach it. The bridge has no authentication: any client that can reach it can open a session and make the bridge send requests to any URL.
+
+To accept connections from other hosts, set the address to `0.0.0.0`:
+
+```bash
+java -jar target/rest-bridge-1.4.0.jar --server.address=0.0.0.0
+```
+
+Or via environment variable:
+```bash
+export SERVER_ADDRESS=0.0.0.0
+java -jar target/rest-bridge-1.4.0.jar
+```
+
 ## Configuration
 
 Application configuration is in `src/main/resources/application.yml`:
 
 ```yaml
 server:
+  address: 127.0.0.1
   port: 9877
 
 rest-bridge:
@@ -118,6 +135,7 @@ rest-bridge:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `SERVER_PORT` | HTTP port | 9877 |
+| `SERVER_ADDRESS` | Address the server listens on | 127.0.0.1 |
 | `REST_BRIDGE_TIMEOUT_SECONDS` | Request timeout | 30 |
 | `REST_BRIDGE_SESSION_TIMEOUT_MINUTES` | Session timeout | 30 |
 
