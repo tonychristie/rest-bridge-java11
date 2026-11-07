@@ -1,4 +1,6 @@
 server:
+  # Local connections only - override with --server.address=0.0.0.0 or SERVER_ADDRESS env var
+  address: 127.0.0.1
   port: 9877  # Different from dfc-bridge (9876)
 
 spring:
