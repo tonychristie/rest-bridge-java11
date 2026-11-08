@@ -175,6 +175,47 @@ class UserGroupServiceTest {
         }
     }
 
+    @Test
+    void getGroupsForUser_sendsUserNameAndReturnsGroupsOfEveryPage() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{\"entries\": ["
+                    + "{\"content\": {\"properties\": {\"group_name\": \"group_a\"}}}],"
+                    + "\"links\": [{\"rel\": \"next\", \"href\": \"next-page\"}]}"));
+            server.enqueue(jsonResponse("{\"entries\": ["
+                    + "{\"content\": {\"properties\": {\"group_name\": \"group_b\"}}}]}"));
+            server.start();
+            mockSession(server);
+
+            List<GroupInfo> groups = userGroupService.getGroupsForUser("session-1", "test01");
+
+            RecordedRequest first = server.takeRequest();
+            assertEquals("/repositories/testrepo/groups", first.getRequestUrl().encodedPath());
+            assertEquals("test01", first.getRequestUrl().queryParameter("user-name"));
+            assertEquals("test01", server.takeRequest().getRequestUrl().queryParameter("user-name"));
+            assertEquals(List.of("group_a", "group_b"),
+                    groups.stream().map(GroupInfo::getGroupName).collect(Collectors.toList()));
+        }
+    }
+
+    @Test
+    void getParentGroups_sendsGroupNameAndReturnsGroups() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{\"entries\": ["
+                    + "{\"content\": {\"properties\": {\"group_name\": \"parent_a\"}}},"
+                    + "{\"content\": {\"properties\": {\"group_name\": \"parent_b\"}}}]}"));
+            server.start();
+            mockSession(server);
+
+            List<GroupInfo> groups = userGroupService.getParentGroups("session-1", "childgroup");
+
+            RecordedRequest request = server.takeRequest();
+            assertEquals("/repositories/testrepo/groups", request.getRequestUrl().encodedPath());
+            assertEquals("childgroup", request.getRequestUrl().queryParameter("group-name"));
+            assertEquals(List.of("parent_a", "parent_b"),
+                    groups.stream().map(GroupInfo::getGroupName).collect(Collectors.toList()));
+        }
+    }
+
     private UserInfo getUserWithPrivileges(int privileges) throws IOException {
         try (MockWebServer server = new MockWebServer()) {
             server.enqueue(jsonResponse("{\"properties\": {\"user_name\": \"dmadmin\", "

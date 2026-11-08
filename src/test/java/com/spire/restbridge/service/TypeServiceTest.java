@@ -1,5 +1,6 @@
 package com.spire.restbridge.service;
 
+import com.spire.restbridge.exception.ObjectNotFoundException;
 import com.spire.restbridge.model.TypeInfo;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -55,6 +56,79 @@ class TypeServiceTest {
             assertEquals(List.of("dm_folder", "dmc_room_folder"),
                     types.stream().map(TypeInfo::getName).collect(Collectors.toList()));
         }
+    }
+
+    @Test
+    void getTypeInfo_readsSuperTypeAndMarksAttributesTheParentHasAsInherited() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{\"name\": \"my_doc\", \"category\": \"custom\","
+                    + "\"parent\": \"http://host/dctm-rest/repositories/testrepo/types/dm_document\","
+                    + "\"properties\": ["
+                    + "{\"name\": \"object_name\", \"type\": \"STRING\", \"length\": 255},"
+                    + "{\"name\": \"my_codes\", \"type\": \"STRING\", \"length\": 64,"
+                    + " \"repeating\": true, \"notnull\": true}]}"));
+            server.enqueue(jsonResponse("{\"name\": \"dm_document\","
+                    + "\"properties\": [{\"name\": \"object_name\", \"type\": \"STRING\"}]}"));
+            mockSession(server);
+
+            TypeInfo type = typeService.getTypeInfo("session-1", "my_doc");
+
+            assertEquals("/repositories/testrepo/types/my_doc", server.takeRequest().getPath());
+            assertEquals("/repositories/testrepo/types/dm_document", server.takeRequest().getPath());
+            assertEquals("dm_document", type.getSuperType());
+            TypeInfo.AttributeInfo objectName = attribute(type, "object_name");
+            TypeInfo.AttributeInfo codes = attribute(type, "my_codes");
+            assertTrue(objectName.isInherited());
+            assertFalse(objectName.isRepeating());
+            assertFalse(objectName.isRequired());
+            assertFalse(codes.isInherited());
+            assertTrue(codes.isRepeating());
+            assertTrue(codes.isRequired());
+            assertEquals(64, codes.getLength());
+        }
+    }
+
+    @Test
+    void getTypeInfo_parentLookupFails_returnsTypeWithNoAttributeInherited() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{\"name\": \"my_doc\","
+                    + "\"parent\": \"http://host/dctm-rest/repositories/testrepo/types/dm_document\","
+                    + "\"properties\": [{\"name\": \"object_name\", \"type\": \"STRING\"}]}"));
+            server.enqueue(new MockResponse().setResponseCode(500));
+            mockSession(server);
+
+            TypeInfo type = typeService.getTypeInfo("session-1", "my_doc");
+
+            assertEquals("my_doc", type.getName());
+            assertEquals("dm_document", type.getSuperType());
+            assertFalse(attribute(type, "object_name").isInherited());
+        }
+    }
+
+    @Test
+    void getTypeInfo_typeNotFound_throwsObjectNotFound() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(404));
+            mockSession(server);
+
+            assertThrows(ObjectNotFoundException.class,
+                    () -> typeService.getTypeInfo("session-1", "no_such_type"));
+        }
+    }
+
+    private void mockSession(MockWebServer server) throws Exception {
+        server.start();
+        RestSessionHolder session = SessionService.createSessionHolder(server.url("/").toString(),
+                "test01", "secret", 30);
+        session.setRepository("testrepo");
+        when(sessionService.getSession("session-1")).thenReturn(session);
+    }
+
+    private static TypeInfo.AttributeInfo attribute(TypeInfo type, String name) {
+        return type.getAttributes().stream()
+                .filter(attr -> name.equals(attr.getName()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("No attribute " + name));
     }
 
     private static MockResponse jsonResponse(String body) {

@@ -1,11 +1,13 @@
 package com.spire.restbridge.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.spire.restbridge.dto.CreateObjectRequest;
 import com.spire.restbridge.dto.UpdateObjectRequest;
 import com.spire.restbridge.exception.ObjectNotFoundException;
 import com.spire.restbridge.exception.RestBridgeException;
 import com.spire.restbridge.exception.SessionNotFoundException;
+import com.spire.restbridge.model.AttributeValue;
 import com.spire.restbridge.model.ObjectInfo;
 import com.spire.restbridge.model.SessionInfo;
 import com.spire.restbridge.model.TypeInfo;
@@ -125,6 +127,77 @@ class ObjectServiceTest {
                     objectService.getObject("session-1", "0901234567890001"));
             assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
             assertEquals("REST_ERROR", ex.getCode());
+        }
+    }
+
+    @Test
+    void getObject_takesAttributeTypesFromMetadataAndInfersTheRestFromValues() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(batchResponse(
+                    operation("getObject", 200, Map.of(
+                            "properties", Map.of(
+                                    "r_object_id", "0901234567890001",
+                                    "r_object_type", "my_doc",
+                                    "keywords", List.of("alpha"),
+                                    "r_modify_date", "2026-11-08T10:00:00.000+00:00",
+                                    "my_count", 5)))));
+            server.start();
+            mockSession(server);
+            when(typeService.getTypeInfo("session-1", "my_doc")).thenReturn(TypeInfo.builder()
+                    .name("my_doc")
+                    .attributes(List.of(
+                            TypeInfo.AttributeInfo.builder()
+                                    .name("keywords").dataType("dm_string").repeating(true).build(),
+                            TypeInfo.AttributeInfo.builder()
+                                    .name("r_modify_date").dataType("TIME").build()))
+                    .build());
+
+            ObjectInfo object = objectService.getObject("session-1", "0901234567890001");
+
+            AttributeValue keywords = object.getAttributes().get("keywords");
+            assertEquals("string", keywords.getType());
+            assertTrue(keywords.isRepeating());
+            assertEquals("time", object.getAttributes().get("r_modify_date").getType());
+            AttributeValue count = object.getAttributes().get("my_count");
+            assertEquals("integer", count.getType());
+            assertFalse(count.isRepeating());
+        }
+    }
+
+    @Test
+    void getObject_readsBasicAndExtendedPermissions() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(batchResponse(
+                    operation("getObject", 200, objectEntity("0901234567890001")),
+                    operation("getPermissions", 200, Map.of(
+                            "basic-permission", "Write",
+                            "extend-permissions", "EXECUTE_PROC,CHANGE_LOCATION"))));
+            server.start();
+            mockSession(server);
+            when(typeService.getTypeInfo("session-1", "my_doc")).thenReturn(keywordsType(true));
+
+            ObjectInfo object = objectService.getObject("session-1", "0901234567890001");
+
+            assertEquals(6, object.getPermissionLevel());
+            assertEquals("WRITE", object.getPermissionLabel());
+            assertEquals(List.of("EXECUTE_PROC", "CHANGE_LOCATION"), object.getExtendedPermissions());
+        }
+    }
+
+    @Test
+    void getObject_permissionsOperationForbidden_returnsObjectWithoutPermissionLevel() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(batchResponse(
+                    operation("getObject", 200, objectEntity("0901234567890001")),
+                    operation("getPermissions", 403, Map.of())));
+            server.start();
+            mockSession(server);
+            when(typeService.getTypeInfo("session-1", "my_doc")).thenReturn(keywordsType(true));
+
+            ObjectInfo object = objectService.getObject("session-1", "0901234567890001");
+
+            assertEquals("0901234567890001", object.getObjectId());
+            assertNull(object.getPermissionLevel());
         }
     }
 
@@ -312,6 +385,20 @@ class ObjectServiceTest {
                 + "{\\\"r_object_id\\\": \\\"0901234567890001\\\", \\\"r_object_type\\\": \\\"" + type + "\\\"}}\"}}]}");
     }
 
+    @SafeVarargs
+    private MockResponse batchResponse(Map<String, Object>... operations) throws Exception {
+        return jsonResponse(objectMapper.writeValueAsString(Map.of("operations", List.of(operations))));
+    }
+
+    private Map<String, Object> operation(String id, int status, Object entity) throws Exception {
+        return Map.of("id", id, "response", Map.of(
+                "status", status, "entity", objectMapper.writeValueAsString(entity)));
+    }
+
+    private static Map<String, Object> objectEntity(String objectId) {
+        return Map.of("properties", Map.of("r_object_id", objectId, "r_object_type", "my_doc"));
+    }
+
     private static TypeInfo keywordsType(boolean repeating) {
         return TypeInfo.builder()
                 .name("my_doc")
@@ -345,6 +432,50 @@ class ObjectServiceTest {
         assertThrows(SessionNotFoundException.class, () -> {
             objectService.cancelCheckout("invalid-session", "0901234567890001");
         });
+    }
+
+    @Test
+    void checkout_sendsSequentialBatchOfLockAndPermissionsAndReturnsObject() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(batchResponse(
+                    operation("checkout", 200, objectEntity("0901234567890001")),
+                    operation("getPermissions", 200, Map.of("basic-permission", "Delete"))));
+            server.start();
+            mockSession(server);
+            when(typeService.getTypeInfo("session-1", "my_doc")).thenReturn(keywordsType(true));
+
+            ObjectInfo object = objectService.checkout("session-1", "0901234567890001");
+
+            assertEquals("0901234567890001", object.getObjectId());
+            assertEquals(1, server.getRequestCount());
+            RecordedRequest batch = server.takeRequest();
+            assertEquals("/repositories/testrepo/batches", batch.getPath());
+            JsonNode body = objectMapper.readTree(batch.getBody().readUtf8());
+            assertTrue(body.get("sequential").asBoolean());
+            JsonNode operations = body.get("operations");
+            assertEquals(2, operations.size());
+            assertEquals("PUT", operations.get(0).get("request").get("method").asText());
+            assertEquals("/repositories/testrepo/objects/0901234567890001/lock",
+                    operations.get(0).get("request").get("uri").asText());
+            assertEquals("GET", operations.get(1).get("request").get("method").asText());
+            assertEquals("/repositories/testrepo/objects/0901234567890001/permissions",
+                    operations.get(1).get("request").get("uri").asText());
+        }
+    }
+
+    @Test
+    void cancelCheckout_deletesLock() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(204));
+            server.start();
+            mockSession(server);
+
+            objectService.cancelCheckout("session-1", "0901234567890001");
+
+            RecordedRequest request = server.takeRequest();
+            assertEquals("DELETE", request.getMethod());
+            assertEquals("/repositories/testrepo/objects/0901234567890001/lock", request.getPath());
+        }
     }
 
     @Test
@@ -420,6 +551,24 @@ class ObjectServiceTest {
             server.takeRequest();
             assertEquals("/repositories/testrepo/objects/0901234567890003/permissions",
                     server.takeRequest().getPath());
+        }
+    }
+
+    @Test
+    void checkin_permissionsReadFails_returnsNewVersion() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{\"properties\": {\"i_chronicle_id\": \"0901234567890001\"}}"));
+            server.enqueue(jsonResponse("{\"properties\": {\"r_object_id\": \"0901234567890003\", "
+                    + "\"r_object_type\": \"dm_document\"}}"));
+            server.enqueue(new MockResponse().setResponseCode(500));
+            server.start();
+            mockSession(server);
+
+            ObjectInfo result = objectService.checkin("session-1", "0901234567890002", "CURRENT");
+
+            assertEquals("0901234567890003", result.getObjectId());
+            assertNull(result.getPermissionLevel());
+            assertEquals(3, server.getRequestCount());
         }
     }
 
@@ -595,5 +744,25 @@ class ObjectServiceTest {
         assertThrows(SessionNotFoundException.class, () -> {
             objectService.deleteObject("invalid-session", "0901234567890001", false);
         });
+    }
+
+    @Test
+    void deleteObject_sendsDelVersionForAllVersionsFlag() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(204));
+            server.enqueue(new MockResponse().setResponseCode(204));
+            server.start();
+            mockSession(server);
+
+            objectService.deleteObject("session-1", "0901234567890001", true);
+            objectService.deleteObject("session-1", "0901234567890001", false);
+
+            RecordedRequest all = server.takeRequest();
+            assertEquals("DELETE", all.getMethod());
+            assertEquals("/repositories/testrepo/objects/0901234567890001",
+                    all.getRequestUrl().encodedPath());
+            assertEquals("all", all.getRequestUrl().queryParameter("del-version"));
+            assertEquals("selected", server.takeRequest().getRequestUrl().queryParameter("del-version"));
+        }
     }
 }

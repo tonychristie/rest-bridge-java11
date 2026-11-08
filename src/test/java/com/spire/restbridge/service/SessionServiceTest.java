@@ -2,6 +2,7 @@ package com.spire.restbridge.service;
 
 import com.spire.restbridge.config.RestBridgeProperties;
 import com.spire.restbridge.dto.ConnectRequest;
+import com.spire.restbridge.dto.ConnectResponse;
 import com.spire.restbridge.exception.ConnectionException;
 import com.spire.restbridge.exception.SessionNotFoundException;
 import okhttp3.mockwebserver.MockResponse;
@@ -9,6 +10,9 @@ import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -82,6 +86,69 @@ class SessionServiceTest {
         assertEquals("CONNECTION_ERROR", ex.getCode());
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
         assertEquals("Cannot connect to REST endpoint: http://127.0.0.1:1/dctm-rest", ex.getMessage());
+    }
+
+    @Test
+    void connect_success_returnsRestSessionWithServerVersionOfFirstServer() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(repositoryResponse());
+            server.start();
+
+            ConnectResponse response = sessionService.connect(connectRequest(server));
+
+            assertEquals("/dctm-rest/repositories/testrepo", server.takeRequest().getPath());
+            assertTrue(response.getSessionId().startsWith("rest-"));
+            assertEquals("23.2.0000.0110", response.getRepositoryInfo().getServerVersion());
+            RestSessionHolder session = sessionService.getSession(response.getSessionId());
+            assertEquals(response.getSessionId(), session.getSessionInfo().getSessionId());
+            assertEquals("testrepo", session.getRepository());
+        }
+    }
+
+    @Test
+    void disconnect_connectedSession_sessionIsNoLongerValid() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(repositoryResponse());
+            server.start();
+            String sessionId = sessionService.connect(connectRequest(server)).getSessionId();
+
+            sessionService.disconnect(sessionId);
+
+            assertFalse(sessionService.isSessionValid(sessionId));
+        }
+    }
+
+    @Test
+    void cleanupExpiredSessions_removesIdleSessionAndKeepsActiveOne() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(repositoryResponse());
+            server.enqueue(repositoryResponse());
+            server.start();
+            String idle = sessionService.connect(connectRequest(server)).getSessionId();
+            String active = sessionService.connect(connectRequest(server)).getSessionId();
+            sessionService.getSessionInfo(idle).setLastActivity(Instant.now().minus(31, ChronoUnit.MINUTES));
+
+            sessionService.cleanupExpiredSessions();
+
+            assertFalse(sessionService.isSessionValid(idle));
+            assertTrue(sessionService.isSessionValid(active));
+        }
+    }
+
+    private static MockResponse repositoryResponse() {
+        return new MockResponse().setHeader("Content-Type", "application/json")
+                .setBody("{\"id\": 290713, \"name\": \"testrepo\", \"servers\": ["
+                        + "{\"name\": \"cs1\", \"version\": \"23.2.0000.0110\"},"
+                        + "{\"name\": \"cs2\", \"version\": \"22.4.0000.0050\"}]}");
+    }
+
+    private static ConnectRequest connectRequest(MockWebServer server) {
+        ConnectRequest request = new ConnectRequest();
+        request.setEndpoint(server.url("/dctm-rest").toString());
+        request.setRepository("testrepo");
+        request.setUsername("test01");
+        request.setPassword("secret");
+        return request;
     }
 
     private HttpStatus connectStatus(int upstreamStatus) throws Exception {
