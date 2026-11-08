@@ -194,7 +194,9 @@ class DqlServiceTest {
         "SELECT r_object_id, object_name FROM dm_document",
         "SELECT r_object_id, r_object_type FROM dm_sysobject WHERE r_object_type = 'dm_document'",
         "SELECT * FROM dm_document WHERE folder('/Temp')",
-        "SELECT r_object_id, object_name, r_modify_date FROM dm_document ORDER BY r_modify_date DESC"
+        "SELECT r_object_id, object_name, r_modify_date FROM dm_document ORDER BY r_modify_date DESC",
+        "SELECT r_object_id FROM dm_folder WHERE object_name = 'GROUP BY'",
+        "SELECT r_object_id FROM dm_document WHERE owner_name IN (SELECT user_name FROM dm_user GROUP BY user_name)"
     })
     void executeQuery_normalQuery_doesNotThrowAggregateException(String query) {
         // These queries should pass the aggregate check and only fail later
