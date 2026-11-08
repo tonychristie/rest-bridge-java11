@@ -389,50 +389,6 @@ public class ObjectService {
         return (String) properties.get("i_chronicle_id");
     }
 
-    /**
-     * Get the set of repeating attribute names for a type.
-     */
-    private Set<String> getRepeatingAttributes(RestSessionHolder session, String typeName) {
-        Map<String, AttrMeta> meta = getAttributeMetadata(session, typeName);
-        Set<String> repeating = new HashSet<>();
-        for (Map.Entry<String, AttrMeta> entry : meta.entrySet()) {
-            if (entry.getValue().repeating) {
-                repeating.add(entry.getKey());
-            }
-        }
-        return repeating;
-    }
-
-    /**
-     * Normalize attributes for a given type, ensuring repeating attributes are lists.
-     * If an attribute is repeating but the value is a scalar, wrap it in a list.
-     */
-    private Map<String, Object> normalizeAttributes(RestSessionHolder session, String typeName,
-                                                     Map<String, Object> attributes) {
-        if (attributes == null || attributes.isEmpty()) {
-            return attributes;
-        }
-
-        Set<String> repeatingAttrs = getRepeatingAttributes(session, typeName);
-        if (repeatingAttrs.isEmpty()) {
-            return attributes;
-        }
-
-        Map<String, Object> normalized = new HashMap<>(attributes);
-        for (Map.Entry<String, Object> entry : normalized.entrySet()) {
-            String attrName = entry.getKey();
-            Object value = entry.getValue();
-
-            if (repeatingAttrs.contains(attrName) && value != null && !(value instanceof List)) {
-                // Wrap scalar value in a list for repeating attribute
-                normalized.put(attrName, Collections.singletonList(value));
-                log.debug("Normalized repeating attribute {} from scalar to list", attrName);
-            }
-        }
-
-        return normalized;
-    }
-
     @SuppressWarnings("unchecked")
     private ObjectInfo extractObjectInfoWithSession(Map<String, Object> response, RestSessionHolder session) {
         Map<String, Object> content = (Map<String, Object>) response.get("content");
@@ -559,32 +515,6 @@ public class ObjectService {
                 return "time";
             default:
                 return "string";
-        }
-    }
-
-    /**
-     * Get attribute metadata for a type from the session's cache, looking the type up on a miss.
-     * A failed lookup is not cached, so the next request looks the type up again.
-     */
-    private Map<String, AttrMeta> getAttributeMetadata(RestSessionHolder session, String typeName) {
-        Map<String, Map<String, AttrMeta>> cache = session.getAttributeMetadata();
-        Map<String, AttrMeta> cached = cache.get(typeName);
-        if (cached != null) {
-            return cached;
-        }
-        try {
-            TypeInfo typeInfo = typeService.getTypeInfo(session.getSessionInfo().getSessionId(), typeName);
-            Map<String, AttrMeta> metadata = new HashMap<>();
-            for (TypeInfo.AttributeInfo attr : typeInfo.getAttributes()) {
-                String normalizedType = normalizeTypeName(attr.getDataType());
-                metadata.put(attr.getName(), new AttrMeta(normalizedType, attr.isRepeating()));
-            }
-            cache.put(typeName, metadata);
-            log.debug("Cached {} attributes for type {}", metadata.size(), typeName);
-            return metadata;
-        } catch (Exception e) {
-            log.warn("Failed to get type info for {}: {}", typeName, e.getMessage());
-            return Collections.emptyMap();
         }
     }
 
@@ -759,5 +689,75 @@ public class ObjectService {
         }
 
         return objectInfo;
+    }
+
+    /**
+     * Get the set of repeating attribute names for a type.
+     */
+    private Set<String> getRepeatingAttributes(RestSessionHolder session, String typeName) {
+        Map<String, AttrMeta> meta = getAttributeMetadata(session, typeName);
+        Set<String> repeating = new HashSet<>();
+        for (Map.Entry<String, AttrMeta> entry : meta.entrySet()) {
+            if (entry.getValue().repeating) {
+                repeating.add(entry.getKey());
+            }
+        }
+        return repeating;
+    }
+
+    /**
+     * Get attribute metadata for a type from the session's cache, looking the type up on a miss.
+     * A failed lookup is not cached, so the next request looks the type up again.
+     */
+    private Map<String, AttrMeta> getAttributeMetadata(RestSessionHolder session, String typeName) {
+        Map<String, Map<String, AttrMeta>> cache = session.getAttributeMetadata();
+        Map<String, AttrMeta> cached = cache.get(typeName);
+        if (cached != null) {
+            return cached;
+        }
+        try {
+            TypeInfo typeInfo = typeService.getTypeInfo(session.getSessionInfo().getSessionId(), typeName);
+            Map<String, AttrMeta> metadata = new HashMap<>();
+            for (TypeInfo.AttributeInfo attr : typeInfo.getAttributes()) {
+                String normalizedType = normalizeTypeName(attr.getDataType());
+                metadata.put(attr.getName(), new AttrMeta(normalizedType, attr.isRepeating()));
+            }
+            cache.put(typeName, metadata);
+            log.debug("Cached {} attributes for type {}", metadata.size(), typeName);
+            return metadata;
+        } catch (Exception e) {
+            log.warn("Failed to get type info for {}: {}", typeName, e.getMessage());
+            return Collections.emptyMap();
+        }
+    }
+
+    /**
+     * Normalize attributes for a given type, ensuring repeating attributes are lists.
+     * If an attribute is repeating but the value is a scalar, wrap it in a list.
+     */
+    private Map<String, Object> normalizeAttributes(RestSessionHolder session, String typeName,
+                                                     Map<String, Object> attributes) {
+        if (attributes == null || attributes.isEmpty()) {
+            return attributes;
+        }
+
+        Set<String> repeatingAttrs = getRepeatingAttributes(session, typeName);
+        if (repeatingAttrs.isEmpty()) {
+            return attributes;
+        }
+
+        Map<String, Object> normalized = new HashMap<>(attributes);
+        for (Map.Entry<String, Object> entry : normalized.entrySet()) {
+            String attrName = entry.getKey();
+            Object value = entry.getValue();
+
+            if (repeatingAttrs.contains(attrName) && value != null && !(value instanceof List)) {
+                // Wrap scalar value in a list for repeating attribute
+                normalized.put(attrName, Collections.singletonList(value));
+                log.debug("Normalized repeating attribute {} from scalar to list", attrName);
+            }
+        }
+
+        return normalized;
     }
 }
