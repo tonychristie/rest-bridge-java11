@@ -61,6 +61,11 @@ class SessionServiceTest {
     }
 
     @Test
+    void connect_unknownUpstreamStatus_throwsConnectionExceptionWithBadGateway() throws Exception {
+        assertEquals(HttpStatus.BAD_GATEWAY, connectStatus(520));
+    }
+
+    @Test
     void connect_repositoryNotFound_throwsConnectionExceptionWithNotFound() throws Exception {
         assertEquals(HttpStatus.NOT_FOUND, connectStatus(404));
     }

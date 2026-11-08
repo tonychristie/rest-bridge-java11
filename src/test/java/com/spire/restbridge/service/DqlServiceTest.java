@@ -68,6 +68,11 @@ class DqlServiceTest {
         assertEquals(HttpStatus.BAD_GATEWAY, queryStatus(500));
     }
 
+    @Test
+    void executeQuery_queryUnknownStatus_throwsDqlExceptionWithBadGateway() throws Exception {
+        assertEquals(HttpStatus.BAD_GATEWAY, queryStatus(520));
+    }
+
     private HttpStatus queryStatus(int upstreamStatus) throws Exception {
         try (MockWebServer server = new MockWebServer()) {
             server.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody("{}"));

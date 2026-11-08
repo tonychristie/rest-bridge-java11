@@ -127,7 +127,7 @@ public class SessionService {
         } catch (WebClientResponseException.NotFound e) {
             throw new ConnectionException("Repository \"" + request.getRepository() + "\" not found.", e);
         } catch (WebClientResponseException e) {
-            throw new ConnectionException("REST connection failed: " + e.getStatusCode() + " - " + e.getResponseBodyAsString(), e);
+            throw new ConnectionException("REST connection failed: " + e.getRawStatusCode() + " - " + e.getResponseBodyAsString(), e);
         } catch (ConnectionException e) {
             throw e;
         } catch (Exception e) {

@@ -126,7 +126,7 @@ public class DqlService {
 
         } catch (WebClientResponseException e) {
             // Check if DQL is disabled
-            if (e.getStatusCode().value() == 400 || e.getStatusCode().value() == 404) {
+            if (e.getRawStatusCode() == 400 || e.getRawStatusCode() == 404) {
                 String body = e.getResponseBodyAsString().toLowerCase();
                 if (body.contains("dql") && (body.contains("disabled") || body.contains("not supported"))) {
                     session.setDqlAvailable(false);
