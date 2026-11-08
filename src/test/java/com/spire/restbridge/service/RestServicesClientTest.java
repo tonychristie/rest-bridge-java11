@@ -7,6 +7,8 @@ import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 
@@ -137,6 +139,22 @@ class RestServicesClientTest {
             assertFalse(ex instanceof ObjectNotFoundException);
             assertEquals("REST_ERROR", ex.getCode());
             assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {499, 520})
+    void call_unknownUpstreamStatus_throwsRestErrorWithBadGateway(int upstreamStatus) throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(upstreamStatus));
+            server.start();
+            RestSessionHolder session = session(server, 30);
+
+            RestBridgeException ex = assertThrows(RestBridgeException.class, () ->
+                    client.call("Failed to get cabinets", null,
+                            () -> client.get(session, "/repositories/testrepo/cabinets")));
+            assertEquals("REST_ERROR", ex.getCode());
+            assertEquals(HttpStatus.BAD_GATEWAY, ex.getStatus());
         }
     }
 
