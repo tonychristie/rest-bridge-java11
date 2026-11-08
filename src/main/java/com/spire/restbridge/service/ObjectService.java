@@ -10,6 +10,7 @@ import com.spire.restbridge.model.TypeInfo;
 import com.spire.restbridge.util.PermissionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
@@ -88,13 +89,13 @@ public class ObjectService {
                     .block(Duration.ofSeconds(TIMEOUT_SECONDS));
 
             if (batchResponse == null) {
-                throw new ObjectNotFoundException(objectId);
+                throw new ObjectNotFoundException("Object not found: " + objectId);
             }
 
             return extractFromBatchResponse(batchResponse, objectId, sessionId);
 
         } catch (WebClientResponseException.NotFound e) {
-            throw new ObjectNotFoundException(objectId);
+            throw new ObjectNotFoundException("Object not found: " + objectId);
         } catch (WebClientResponseException e) {
             throw new RestBridgeException(ERROR_CODE,
                     "Failed to get object: " + e.getResponseBodyAsString(), e);
@@ -224,13 +225,13 @@ public class ObjectService {
                     .block(Duration.ofSeconds(TIMEOUT_SECONDS));
 
             if (batchResponse == null) {
-                throw new RestBridgeException(ERROR_CODE, "No response from update");
+                throw new RestBridgeException(ERROR_CODE, "No response from update", HttpStatus.BAD_GATEWAY);
             }
 
             return extractFromWriteBatchResponse(batchResponse, objectId, "updateObject", sessionId);
 
         } catch (WebClientResponseException.NotFound e) {
-            throw new ObjectNotFoundException(objectId);
+            throw new ObjectNotFoundException("Object not found: " + objectId);
         } catch (WebClientResponseException e) {
             throw new RestBridgeException(ERROR_CODE,
                     "Failed to update object: " + e.getResponseBodyAsString(), e);
@@ -265,13 +266,13 @@ public class ObjectService {
                     .block(Duration.ofSeconds(TIMEOUT_SECONDS));
 
             if (batchResponse == null) {
-                throw new RestBridgeException(ERROR_CODE, "No response from checkout");
+                throw new RestBridgeException(ERROR_CODE, "No response from checkout", HttpStatus.BAD_GATEWAY);
             }
 
             return extractFromWriteBatchResponse(batchResponse, objectId, "checkout", sessionId);
 
         } catch (WebClientResponseException.NotFound e) {
-            throw new ObjectNotFoundException(objectId);
+            throw new ObjectNotFoundException("Object not found: " + objectId);
         } catch (WebClientResponseException e) {
             throw new RestBridgeException(ERROR_CODE,
                     "Failed to checkout object: " + e.getResponseBodyAsString(), e);
@@ -300,7 +301,7 @@ public class ObjectService {
                     .block(Duration.ofSeconds(TIMEOUT_SECONDS));
 
         } catch (WebClientResponseException.NotFound e) {
-            throw new ObjectNotFoundException(objectId);
+            throw new ObjectNotFoundException("Object not found: " + objectId);
         } catch (WebClientResponseException e) {
             throw new RestBridgeException(ERROR_CODE,
                     "Failed to cancel checkout: " + e.getResponseBodyAsString(), e);
@@ -348,7 +349,7 @@ public class ObjectService {
                     .block(Duration.ofSeconds(TIMEOUT_SECONDS));
 
             if (response == null) {
-                throw new RestBridgeException(ERROR_CODE, "No response from checkin");
+                throw new RestBridgeException(ERROR_CODE, "No response from checkin", HttpStatus.BAD_GATEWAY);
             }
 
             ObjectInfo objectInfo = extractObjectInfoWithSession(response, sessionId);
@@ -356,7 +357,7 @@ public class ObjectService {
             return objectInfo;
 
         } catch (WebClientResponseException.NotFound e) {
-            throw new ObjectNotFoundException(objectId);
+            throw new ObjectNotFoundException("Object not found: " + objectId);
         } catch (WebClientResponseException e) {
             throw new RestBridgeException(ERROR_CODE,
                     "Failed to checkin object: " + e.getResponseBodyAsString(), e);
@@ -416,7 +417,7 @@ public class ObjectService {
             }
 
             if (response == null) {
-                throw new RestBridgeException(ERROR_CODE, "No response from create");
+                throw new RestBridgeException(ERROR_CODE, "No response from create", HttpStatus.BAD_GATEWAY);
             }
 
             ObjectInfo objectInfo = extractObjectInfoWithSession(response, sessionId);
@@ -453,7 +454,7 @@ public class ObjectService {
                     .block(Duration.ofSeconds(TIMEOUT_SECONDS));
 
         } catch (WebClientResponseException.NotFound e) {
-            throw new ObjectNotFoundException(objectId);
+            throw new ObjectNotFoundException("Object not found: " + objectId);
         } catch (WebClientResponseException e) {
             throw new RestBridgeException(ERROR_CODE,
                     "Failed to delete object: " + e.getResponseBodyAsString(), e);
@@ -469,7 +470,8 @@ public class ObjectService {
     @SuppressWarnings("unchecked")
     private String resolveFolderId(RestSessionHolder session, String folderPath) {
         if (folderPath == null || folderPath.isEmpty()) {
-            throw new RestBridgeException(ERROR_CODE, "Folder path is required for non-cabinet objects");
+            throw new RestBridgeException(ERROR_CODE, "Folder path is required for non-cabinet objects",
+                    HttpStatus.BAD_REQUEST);
         }
 
         // If it looks like an object ID (16 hex chars), use it directly
@@ -561,7 +563,7 @@ public class ObjectService {
                 .block(Duration.ofSeconds(TIMEOUT_SECONDS));
 
         if (response == null) {
-            throw new RestBridgeException(ERROR_CODE, "No response from object type lookup");
+            throw new RestBridgeException(ERROR_CODE, "No response from object type lookup", HttpStatus.BAD_GATEWAY);
         }
         Map<String, Object> properties = (Map<String, Object>) response.get("properties");
         return (String) properties.get("r_object_type");
@@ -581,7 +583,7 @@ public class ObjectService {
                 .block(Duration.ofSeconds(TIMEOUT_SECONDS));
 
         if (response == null) {
-            throw new RestBridgeException(ERROR_CODE, "No response from chronicle id lookup");
+            throw new RestBridgeException(ERROR_CODE, "No response from chronicle id lookup", HttpStatus.BAD_GATEWAY);
         }
         Map<String, Object> properties = (Map<String, Object>) response.get("properties");
         return (String) properties.get("i_chronicle_id");
@@ -987,7 +989,7 @@ public class ObjectService {
                 (List<Map<String, Object>>) batchResponse.get("operations");
 
         if (operations == null || operations.isEmpty()) {
-            throw new ObjectNotFoundException(objectId);
+            throw new ObjectNotFoundException("Object not found: " + objectId);
         }
 
         ObjectInfo objectInfo = null;
@@ -1005,7 +1007,7 @@ public class ObjectService {
 
             if ("getObject".equals(opId)) {
                 if (status != null && status == 404) {
-                    throw new ObjectNotFoundException(objectId);
+                    throw new ObjectNotFoundException("Object not found: " + objectId);
                 }
                 if (entity != null && status != null && status == 200) {
                     try {
@@ -1028,7 +1030,7 @@ public class ObjectService {
         }
 
         if (objectInfo == null) {
-            throw new ObjectNotFoundException(objectId);
+            throw new ObjectNotFoundException("Object not found: " + objectId);
         }
 
         return objectInfo;
@@ -1046,7 +1048,7 @@ public class ObjectService {
                 (List<Map<String, Object>>) batchResponse.get("operations");
 
         if (operations == null || operations.isEmpty()) {
-            throw new ObjectNotFoundException(objectId);
+            throw new ObjectNotFoundException("Object not found: " + objectId);
         }
 
         ObjectInfo objectInfo = null;
@@ -1064,11 +1066,12 @@ public class ObjectService {
 
             if (writeOperationId.equals(opId)) {
                 if (status != null && status == 404) {
-                    throw new ObjectNotFoundException(objectId);
+                    throw new ObjectNotFoundException("Object not found: " + objectId);
                 }
                 if (status != null && status >= 400) {
                     throw new RestBridgeException(ERROR_CODE,
-                            "Write operation failed with status " + status + ": " + entity);
+                            "Write operation failed with status " + status + ": " + entity,
+                            RestBridgeException.upstreamStatus(status));
                 }
                 if (entity != null && status != null && (status == 200 || status == 201)) {
                     try {
@@ -1091,7 +1094,7 @@ public class ObjectService {
         }
 
         if (objectInfo == null) {
-            throw new RestBridgeException(ERROR_CODE, "No valid response from write operation");
+            throw new RestBridgeException(ERROR_CODE, "No valid response from write operation", HttpStatus.BAD_GATEWAY);
         }
 
         return objectInfo;

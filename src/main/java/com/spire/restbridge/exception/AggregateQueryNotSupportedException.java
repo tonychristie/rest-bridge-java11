@@ -1,5 +1,7 @@
 package com.spire.restbridge.exception;
 
+import org.springframework.http.HttpStatus;
+
 /**
  * Exception thrown when an aggregate DQL query is attempted via REST Services.
  *
@@ -9,16 +11,18 @@ package com.spire.restbridge.exception;
  */
 public class AggregateQueryNotSupportedException extends DqlException {
 
+    private static final String CODE = "AGGREGATE_QUERY_NOT_SUPPORTED";
+
     private static final String MESSAGE =
         "Aggregate DQL queries (GROUP BY, COUNT, etc.) are not supported via REST Services. " +
         "Use DFC Bridge for aggregate queries.";
 
     public AggregateQueryNotSupportedException() {
-        super(MESSAGE);
+        super(CODE, MESSAGE, HttpStatus.BAD_REQUEST);
     }
 
     public AggregateQueryNotSupportedException(String query) {
-        super(MESSAGE + " Query: " + truncateQuery(query));
+        super(CODE, MESSAGE + " Query: " + truncateQuery(query), HttpStatus.BAD_REQUEST);
     }
 
     private static String truncateQuery(String query) {
