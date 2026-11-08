@@ -13,7 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.client.HttpClientErrorException;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -306,7 +306,7 @@ public class ObjectService {
             }
             return folderId;
 
-        } catch (WebClientResponseException.NotFound e) {
+        } catch (HttpClientErrorException.NotFound e) {
             throw new ObjectNotFoundException("Folder not found: " + folderPath);
         } catch (ObjectNotFoundException e) {
             throw e;
@@ -627,7 +627,7 @@ public class ObjectService {
             if (response != null) {
                 extractPermissionInfo(response, objectInfo);
             }
-        } catch (WebClientResponseException.NotFound e) {
+        } catch (HttpClientErrorException.NotFound e) {
             // Object may not support permissions (non-sysobject)
             log.debug("No permissions available for object {}", objectInfo.getObjectId());
         } catch (Exception e) {

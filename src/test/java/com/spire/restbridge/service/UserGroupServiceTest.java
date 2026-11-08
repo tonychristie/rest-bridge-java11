@@ -1,6 +1,5 @@
 package com.spire.restbridge.service;
 
-import com.spire.restbridge.config.RestBridgeProperties;
 import com.spire.restbridge.exception.SessionNotFoundException;
 import com.spire.restbridge.model.GroupInfo;
 import com.spire.restbridge.model.UserInfo;
@@ -11,7 +10,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
-import org.springframework.web.reactive.function.client.WebClient;
 
 import java.io.IOException;
 import java.util.List;
@@ -33,7 +31,7 @@ class UserGroupServiceTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-        userGroupService = new UserGroupService(sessionService, new RestServicesClient(new RestBridgeProperties()));
+        userGroupService = new UserGroupService(sessionService, new RestServicesClient());
     }
 
     @Test
@@ -189,9 +187,9 @@ class UserGroupServiceTest {
     }
 
     private void mockSession(MockWebServer server) {
-        RestSessionHolder session = new RestSessionHolder();
+        RestSessionHolder session = SessionService.createSessionHolder(server.url("/").toString(),
+                "test01", "secret", 30);
         session.setRepository("testrepo");
-        session.setWebClient(WebClient.create(server.url("/").toString()));
         when(sessionService.getSession("session-1")).thenReturn(session);
     }
 
@@ -213,9 +211,9 @@ class UserGroupServiceTest {
                             + "\"group_source\": \"LDAP\"}}"));
             server.start();
 
-            RestSessionHolder session = new RestSessionHolder();
+            RestSessionHolder session = SessionService.createSessionHolder(server.url("/").toString(),
+                    "test01", "secret", 30);
             session.setRepository("testrepo");
-            session.setWebClient(WebClient.create(server.url("/").toString()));
             when(sessionService.getSession("session-1")).thenReturn(session);
 
             GroupInfo group = userGroupService.getGroup("session-1", "testgroup");

@@ -1,15 +1,16 @@
 package com.spire.restbridge.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.spire.restbridge.config.RestBridgeProperties;
 import com.spire.restbridge.exception.ObjectNotFoundException;
 import com.spire.restbridge.exception.RestBridgeException;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.http.MediaType;
 
 import java.util.Collections;
 import java.util.List;
@@ -23,6 +24,8 @@ class RestServicesClientTest {
 
     private static final String NEXT_LINK = "\"links\": [{\"rel\": \"next\", \"href\": \"next-page\"}]";
 
+    private final RestServicesClient client = new RestServicesClient();
+
     @Test
     void getAllPages_readsUntilPageWithoutNextLinkAndReturnsAllEntries() throws Exception {
         try (MockWebServer server = new MockWebServer()) {
@@ -31,7 +34,7 @@ class RestServicesClientTest {
             server.enqueue(jsonResponse("{\"entries\": [{\"id\": \"c\"}]}"));
             server.start();
 
-            List<Map<String, Object>> entries = client(30).getAllPages(session(server),
+            List<Map<String, Object>> entries = client.getAllPages(session(server, 30),
                     "/repositories/{repo}/cabinets", Collections.emptyMap(), Map.of("repo", "testrepo"));
 
             assertEquals(List.of("a", "b", "c"),
@@ -47,12 +50,60 @@ class RestServicesClientTest {
     }
 
     @Test
+    void getAllPages_filterUriVariable_isSentFullyEncoded() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{\"entries\": []}"));
+            server.start();
+
+            client.getAllPages(session(server, 30), "/repositories/{repo}/users",
+                    Map.of("filter", "{filter}"),
+                    Map.of("repo", "testrepo", "filter", "starts-with(name,'o''b') and x='a,b'"));
+
+            assertEquals("/repositories/testrepo/users"
+                            + "?filter=starts-with%28name%2C%27o%27%27b%27%29%20and%20x%3D%27a%2Cb%27"
+                            + "&items-per-page=100&page=1",
+                    server.takeRequest().getPath());
+        }
+    }
+
+    @Test
+    void get_withAcceptType_sendsThatAcceptHeader() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{}"));
+            server.start();
+
+            client.get(session(server, 30), MediaType.parseMediaType("application/vnd.emc.documentum+json"),
+                    uriBuilder -> uriBuilder.path("/repositories/{repo}").build("testrepo"));
+
+            assertEquals("application/vnd.emc.documentum+json", server.takeRequest().getHeader("Accept"));
+        }
+    }
+
+    @Test
+    void requests_carryBasicAuthorizationFromSessionCredentials() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{}"));
+            server.enqueue(jsonResponse("{}"));
+            server.enqueue(new MockResponse().setResponseCode(204));
+            server.start();
+            RestSessionHolder session = session(server, 30);
+
+            client.get(session, "/repositories/{repo}", "testrepo");
+            client.post(session, "/repositories/{repo}/batches", Map.of(), "testrepo");
+            client.delete(session, "/repositories/{repo}/objects/{id}", "testrepo", "0901234567890001");
+
+            for (int i = 0; i < 3; i++) {
+                assertEquals("Basic dGVzdDAxOnNlY3JldA==", server.takeRequest().getHeader("Authorization"));
+            }
+        }
+    }
+
+    @Test
     void call_responseSlowerThanTimeout_throwsGatewayTimeout() throws Exception {
         try (MockWebServer server = new MockWebServer()) {
             server.enqueue(jsonResponse("{}").setBodyDelay(2, TimeUnit.SECONDS));
             server.start();
-            RestServicesClient client = client(1);
-            RestSessionHolder session = session(server);
+            RestSessionHolder session = session(server, 1);
 
             RestBridgeException ex = assertThrows(RestBridgeException.class, () ->
                     client.call("Failed to get user", null, () -> client.get(session, "/repositories/testrepo")));
@@ -65,8 +116,7 @@ class RestServicesClientTest {
         try (MockWebServer server = new MockWebServer()) {
             server.enqueue(new MockResponse().setResponseCode(404));
             server.start();
-            RestServicesClient client = client(30);
-            RestSessionHolder session = session(server);
+            RestSessionHolder session = session(server, 30);
 
             ObjectNotFoundException ex = assertThrows(ObjectNotFoundException.class, () ->
                     client.call("Failed to get user", "User not found: test01",
@@ -81,8 +131,7 @@ class RestServicesClientTest {
         try (MockWebServer server = new MockWebServer()) {
             server.enqueue(new MockResponse().setResponseCode(404));
             server.start();
-            RestServicesClient client = client(30);
-            RestSessionHolder session = session(server);
+            RestSessionHolder session = session(server, 30);
 
             RestBridgeException ex = assertThrows(RestBridgeException.class, () ->
                     client.call("Failed to get cabinets", null,
@@ -93,13 +142,29 @@ class RestServicesClientTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(ints = {499, 520})
+    void call_unknownUpstreamStatus_throwsRestErrorWithBadGateway(int upstreamStatus) throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(upstreamStatus));
+            server.start();
+            RestSessionHolder session = session(server, 30);
+
+            RestBridgeException ex = assertThrows(RestBridgeException.class, () ->
+                    client.call("Failed to get cabinets", null,
+                            () -> client.get(session, "/repositories/testrepo/cabinets")));
+            assertEquals("REST_ERROR", ex.getCode());
+            assertEquals(HttpStatus.BAD_GATEWAY, ex.getStatus());
+        }
+    }
+
     @Test
     void call_bridgeExceptionInside_comesOutUnchanged() {
         RestBridgeException thrown = new RestBridgeException("REST_ERROR", "No response from update",
                 HttpStatus.BAD_GATEWAY);
 
         RestBridgeException ex = assertThrows(RestBridgeException.class, () ->
-                client(30).call("Failed to update object", "Object not found: 0901234567890001", () -> {
+                client.call("Failed to update object", "Object not found: 0901234567890001", () -> {
                     throw thrown;
                 }));
         assertSame(thrown, ex);
@@ -114,7 +179,7 @@ class RestServicesClientTest {
                     + "{\"id\": \"getPermissions\", \"response\": {\"status\": 403, \"entity\": \"denied\"}}]}"));
             server.start();
 
-            Map<String, RestServicesClient.BatchResult> results = client(30).batch(session(server), true, List.of(
+            Map<String, RestServicesClient.BatchResult> results = client.batch(session(server, 30), true, List.of(
                     new RestServicesClient.BatchOperation("updateObject", "POST",
                             "/repositories/testrepo/objects/0901234567890001", "{\"properties\": {}}"),
                     new RestServicesClient.BatchOperation("getPermissions", "GET",
@@ -138,16 +203,10 @@ class RestServicesClientTest {
         }
     }
 
-    private static RestServicesClient client(int timeoutSeconds) {
-        RestBridgeProperties properties = new RestBridgeProperties();
-        properties.setTimeoutSeconds(timeoutSeconds);
-        return new RestServicesClient(properties);
-    }
-
-    private static RestSessionHolder session(MockWebServer server) {
-        RestSessionHolder session = new RestSessionHolder();
+    private static RestSessionHolder session(MockWebServer server, int timeoutSeconds) {
+        RestSessionHolder session = SessionService.createSessionHolder(server.url("/").toString(),
+                "test01", "secret", timeoutSeconds);
         session.setRepository("testrepo");
-        session.setWebClient(WebClient.create(server.url("/").toString()));
         return session;
     }
 

@@ -1,15 +1,17 @@
 package com.spire.restbridge.service;
 
-import com.spire.restbridge.config.RestBridgeProperties;
 import com.spire.restbridge.exception.ObjectNotFoundException;
 import com.spire.restbridge.exception.RestBridgeException;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriBuilder;
 
 import java.net.URI;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -19,7 +21,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
- * Makes the calls to Documentum REST Services for a session, blocking for the configured timeout.
+ * Makes the calls to Documentum REST Services for a session.
  */
 @Component
 public class RestServicesClient {
@@ -28,39 +30,24 @@ public class RestServicesClient {
     private static final int ITEMS_PER_PAGE = 100;
     private static final String DOCUMENTUM_JSON = "application/vnd.emc.documentum+json";
 
-    private final RestBridgeProperties properties;
-
-    public RestServicesClient(RestBridgeProperties properties) {
-        this.properties = properties;
-    }
-
     @SuppressWarnings("unchecked")
     public Map<String, Object> get(RestSessionHolder session, String uriTemplate, Object... uriVariables) {
-        return session.getWebClient().get()
-                .uri(uriTemplate, uriVariables)
-                .retrieve()
-                .bodyToMono(Map.class)
-                .block(timeout());
+        return session.getRestTemplate().getForObject(uriTemplate, Map.class, uriVariables);
     }
 
     @SuppressWarnings("unchecked")
     public Map<String, Object> get(RestSessionHolder session, Function<UriBuilder, URI> uriFunction) {
-        return session.getWebClient().get()
-                .uri(uriFunction)
-                .retrieve()
-                .bodyToMono(Map.class)
-                .block(timeout());
+        return session.getRestTemplate().getForObject(uri(session, uriFunction), Map.class);
     }
 
     @SuppressWarnings("unchecked")
     public Map<String, Object> get(RestSessionHolder session, MediaType accept,
                                    Function<UriBuilder, URI> uriFunction) {
-        return session.getWebClient().get()
-                .uri(uriFunction)
-                .accept(accept)
-                .retrieve()
-                .bodyToMono(Map.class)
-                .block(timeout());
+        HttpHeaders headers = new HttpHeaders();
+        headers.setAccept(List.of(accept));
+        return session.getRestTemplate()
+                .exchange(uri(session, uriFunction), HttpMethod.GET, new HttpEntity<>(headers), Map.class)
+                .getBody();
     }
 
     /**
@@ -104,39 +91,21 @@ public class RestServicesClient {
     @SuppressWarnings("unchecked")
     public Map<String, Object> post(RestSessionHolder session, String uriTemplate, Object body,
                                     Object... uriVariables) {
-        return session.getWebClient().post()
-                .uri(uriTemplate, uriVariables)
-                .bodyValue(body)
-                .retrieve()
-                .bodyToMono(Map.class)
-                .block(timeout());
+        return session.getRestTemplate().postForObject(uriTemplate, body, Map.class, uriVariables);
     }
 
     @SuppressWarnings("unchecked")
     public Map<String, Object> post(RestSessionHolder session, Function<UriBuilder, URI> uriFunction,
                                     Object body) {
-        return session.getWebClient().post()
-                .uri(uriFunction)
-                .bodyValue(body)
-                .retrieve()
-                .bodyToMono(Map.class)
-                .block(timeout());
+        return session.getRestTemplate().postForObject(uri(session, uriFunction), body, Map.class);
     }
 
     public void delete(RestSessionHolder session, String uriTemplate, Object... uriVariables) {
-        session.getWebClient().delete()
-                .uri(uriTemplate, uriVariables)
-                .retrieve()
-                .toBodilessEntity()
-                .block(timeout());
+        session.getRestTemplate().delete(uriTemplate, uriVariables);
     }
 
     public void delete(RestSessionHolder session, Function<UriBuilder, URI> uriFunction) {
-        session.getWebClient().delete()
-                .uri(uriFunction)
-                .retrieve()
-                .toBodilessEntity()
-                .block(timeout());
+        session.getRestTemplate().delete(uri(session, uriFunction));
     }
 
     /**
@@ -200,12 +169,12 @@ public class RestServicesClient {
             return body.get();
         } catch (RestBridgeException e) {
             throw e;
-        } catch (WebClientResponseException.NotFound e) {
+        } catch (HttpClientErrorException.NotFound e) {
             if (notFoundMessage != null) {
                 throw new ObjectNotFoundException(notFoundMessage);
             }
             throw new RestBridgeException(ERROR_CODE, failureMessage + ": " + e.getResponseBodyAsString(), e);
-        } catch (WebClientResponseException e) {
+        } catch (RestClientResponseException e) {
             throw new RestBridgeException(ERROR_CODE, failureMessage + ": " + e.getResponseBodyAsString(), e);
         } catch (Exception e) {
             throw new RestBridgeException(ERROR_CODE, failureMessage + ": " + e.getMessage(), e);
@@ -232,8 +201,8 @@ public class RestServicesClient {
         return false;
     }
 
-    private Duration timeout() {
-        return Duration.ofSeconds(properties.getTimeoutSeconds());
+    private static URI uri(RestSessionHolder session, Function<UriBuilder, URI> uriFunction) {
+        return uriFunction.apply(session.getUriBuilderFactory().builder());
     }
 
     /**

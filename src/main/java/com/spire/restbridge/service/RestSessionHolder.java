@@ -2,7 +2,8 @@ package com.spire.restbridge.service;
 
 import com.spire.restbridge.model.SessionInfo;
 import lombok.Data;
-import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.DefaultUriBuilderFactory;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -13,7 +14,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Data
 public class RestSessionHolder {
 
-    private WebClient webClient;
+    private RestTemplate restTemplate;
+    private DefaultUriBuilderFactory uriBuilderFactory;
     private String repository;
     private SessionInfo sessionInfo;
     private boolean dqlAvailable;
