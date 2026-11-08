@@ -125,14 +125,13 @@ public class DqlService {
                     .build();
 
         } catch (WebClientResponseException e) {
-            // Check if DQL is disabled
+            if (isDqlRefusal(e)) {
+                session.setDqlAvailable(false);
+                session.setDqlChecked(true);
+                throw new DqlNotAvailableException(e.getResponseBodyAsString());
+            }
             if (e.getRawStatusCode() == 400 || e.getRawStatusCode() == 404) {
                 String body = e.getResponseBodyAsString().toLowerCase();
-                if (body.contains("dql") && (body.contains("disabled") || body.contains("not supported"))) {
-                    session.setDqlAvailable(false);
-                    session.setDqlChecked(true);
-                    throw new DqlNotAvailableException(e.getResponseBodyAsString());
-                }
                 // Check for QueryResultItemView error (aggregate query indicator)
                 if (body.contains("queryresultitemview") ||
                     (body.contains("failed to instantiate") && body.contains("id=null"))) {
@@ -150,28 +149,47 @@ public class DqlService {
 
     /**
      * Check if DQL is available by executing a simple query.
+     * Only a refusal from REST Services marks DQL unavailable. Any other failure
+     * leaves the session unchecked, so the next DQL request checks again.
      */
     private void checkDqlAvailability(RestSessionHolder session) {
         log.debug("Checking DQL availability for session");
 
         try {
-            // Try a simple query to check availability
-            Map<String, Object> response = executeDqlRequest(
-                    session, "SELECT r_object_id FROM dm_docbase_config", 1, 1);
+            executeDqlRequest(session, "SELECT r_object_id FROM dm_docbase_config", 1, 1);
 
-            session.setDqlAvailable(response != null);
+            session.setDqlAvailable(true);
             session.setDqlChecked(true);
-            log.info("DQL is {} for this session", session.isDqlAvailable() ? "available" : "not available");
+            log.info("DQL is available for this session");
 
         } catch (WebClientResponseException e) {
+            if (!isDqlRefusal(e)) {
+                throw new DqlException("DQL availability check failed: " + e.getResponseBodyAsString(), e);
+            }
             session.setDqlAvailable(false);
             session.setDqlChecked(true);
             log.info("DQL is not available: {}", e.getResponseBodyAsString());
         } catch (Exception e) {
-            session.setDqlAvailable(false);
-            session.setDqlChecked(true);
-            log.info("DQL is not available: {}", e.getMessage());
+            throw new DqlException("DQL availability check failed: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * True when REST Services refuses DQL for the user (403 E_DQL_QUERY_FAILED)
+     * or reports DQL as disabled.
+     */
+    private boolean isDqlRefusal(WebClientResponseException e) {
+        int status = e.getRawStatusCode();
+        String body = e.getResponseBodyAsString();
+        if (status == 403) {
+            return body.contains("E_DQL_QUERY_FAILED");
+        }
+        if (status == 400 || status == 404) {
+            String lowerBody = body.toLowerCase();
+            return lowerBody.contains("dql")
+                    && (lowerBody.contains("disabled") || lowerBody.contains("not supported"));
+        }
+        return false;
     }
 
     /**

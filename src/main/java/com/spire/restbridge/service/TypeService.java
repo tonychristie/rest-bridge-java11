@@ -3,6 +3,7 @@ package com.spire.restbridge.service;
 import com.spire.restbridge.exception.ObjectNotFoundException;
 import com.spire.restbridge.exception.RestBridgeException;
 import com.spire.restbridge.model.TypeInfo;
+import com.spire.restbridge.util.PropertyUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -210,8 +211,8 @@ public class TypeService {
 
     @SuppressWarnings("unchecked")
     private TypeInfo extractTypeInfo(Map<String, Object> response, Set<String> inheritedAttrNames) {
-        String name = (String) response.getOrDefault("name", "");
-        String category = (String) response.getOrDefault("category", "");
+        String name = PropertyUtils.str(response, "name");
+        String category = PropertyUtils.str(response, "category");
 
         // Super type comes from "parent" URL
         String superType = "";

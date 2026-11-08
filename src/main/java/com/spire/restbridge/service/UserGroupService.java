@@ -4,6 +4,7 @@ import com.spire.restbridge.exception.ObjectNotFoundException;
 import com.spire.restbridge.exception.RestBridgeException;
 import com.spire.restbridge.model.GroupInfo;
 import com.spire.restbridge.model.UserInfo;
+import com.spire.restbridge.util.PropertyUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -29,6 +30,7 @@ public class UserGroupService {
     private static final Logger log = LoggerFactory.getLogger(UserGroupService.class);
     private static final String ERROR_CODE = "REST_ERROR";
     private static final int TIMEOUT_SECONDS = 30;
+    private static final int SUPERUSER_PRIVILEGE = 16;
 
     private final SessionService sessionService;
 
@@ -384,15 +386,18 @@ public class UserGroupService {
             properties = response;
         }
 
+        Object privileges = properties.get("user_privileges");
+
         return UserInfo.builder()
-                .objectId((String) properties.getOrDefault("r_object_id", ""))
-                .userName((String) properties.getOrDefault("user_name", ""))
-                .userOsName((String) properties.getOrDefault("user_os_name", ""))
-                .userAddress((String) properties.getOrDefault("user_address", ""))
-                .userState(String.valueOf(properties.getOrDefault("user_state", "")))
-                .defaultFolder((String) properties.getOrDefault("default_folder", ""))
-                .userGroupName((String) properties.getOrDefault("user_group_name", ""))
-                .superUser(Boolean.TRUE.equals(properties.get("r_is_superuser")))
+                .objectId(PropertyUtils.str(properties, "r_object_id"))
+                .userName(PropertyUtils.str(properties, "user_name"))
+                .userOsName(PropertyUtils.str(properties, "user_os_name"))
+                .userAddress(PropertyUtils.str(properties, "user_address"))
+                .userState(PropertyUtils.str(properties, "user_state"))
+                .defaultFolder(PropertyUtils.str(properties, "default_folder"))
+                .userGroupName(PropertyUtils.str(properties, "user_group_name"))
+                .superUser(privileges instanceof Number
+                        && (((Number) privileges).intValue() & SUPERUSER_PRIVILEGE) != 0)
                 .build();
     }
 
@@ -416,14 +421,14 @@ public class UserGroupService {
         }
 
         return GroupInfo.builder()
-                .objectId((String) properties.getOrDefault("r_object_id", ""))
-                .groupName((String) properties.getOrDefault("group_name", ""))
-                .description((String) properties.getOrDefault("description", ""))
-                .groupClass((String) properties.getOrDefault("group_class", ""))
-                .groupAdmin((String) properties.getOrDefault("group_admin", ""))
-                .ownerName((String) properties.getOrDefault("owner_name", ""))
-                .groupAddress((String) properties.getOrDefault("group_address", ""))
-                .groupSource((String) properties.getOrDefault("group_source", ""))
+                .objectId(PropertyUtils.str(properties, "r_object_id"))
+                .groupName(PropertyUtils.str(properties, "group_name"))
+                .description(PropertyUtils.str(properties, "description"))
+                .groupClass(PropertyUtils.str(properties, "group_class"))
+                .groupAdmin(PropertyUtils.str(properties, "group_admin"))
+                .ownerName(PropertyUtils.str(properties, "owner_name"))
+                .groupAddress(PropertyUtils.str(properties, "group_address"))
+                .groupSource(PropertyUtils.str(properties, "group_source"))
                 .isPrivate(Boolean.TRUE.equals(properties.get("is_private")))
                 .isDynamic(Boolean.TRUE.equals(properties.get("is_dynamic")))
                 .usersNames(usersNames)
