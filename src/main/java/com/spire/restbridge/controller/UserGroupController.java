@@ -49,7 +49,7 @@ public class UserGroupController {
     })
     public ResponseEntity<List<UserInfo>> listUsers(
             @Parameter(description = "Session ID") @RequestParam String sessionId,
-            @Parameter(description = "User name pattern filter") @RequestParam(required = false) String pattern) {
+            @Parameter(description = "User name pattern filter (supports * wildcard)") @RequestParam(required = false) String pattern) {
         List<UserInfo> users = userGroupService.listUsers(sessionId, pattern);
         return ResponseEntity.ok(users);
     }
@@ -92,7 +92,7 @@ public class UserGroupController {
     })
     public ResponseEntity<List<GroupInfo>> listGroups(
             @Parameter(description = "Session ID") @RequestParam String sessionId,
-            @Parameter(description = "Group name pattern filter") @RequestParam(required = false) String pattern) {
+            @Parameter(description = "Group name pattern filter (supports * wildcard)") @RequestParam(required = false) String pattern) {
         List<GroupInfo> groups = userGroupService.listGroups(sessionId, pattern);
         return ResponseEntity.ok(groups);
     }

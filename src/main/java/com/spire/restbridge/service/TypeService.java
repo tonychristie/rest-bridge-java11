@@ -3,6 +3,7 @@ package com.spire.restbridge.service;
 import com.spire.restbridge.exception.ObjectNotFoundException;
 import com.spire.restbridge.exception.RestBridgeException;
 import com.spire.restbridge.model.TypeInfo;
+import com.spire.restbridge.util.NamePatternUtils;
 import com.spire.restbridge.util.PropertyUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -136,6 +137,8 @@ public class TypeService {
         log.debug("Listing types via REST, pattern: {}", pattern);
 
         RestSessionHolder session = sessionService.getSession(sessionId);
+        boolean hasPattern = pattern != null && !pattern.isEmpty();
+        String filter = hasPattern ? NamePatternUtils.toFilter("name", pattern) : null;
 
         try {
             List<TypeInfo> results = new ArrayList<>();
@@ -151,8 +154,8 @@ public class TypeService {
                                     .queryParam("inline", "true")
                                     .queryParam("items-per-page", "100")
                                     .queryParam("page", currentPage);
-                            if (pattern != null && !pattern.isEmpty()) {
-                                builder.queryParam("filter", "starts-with(name,'" + pattern + "')");
+                            if (filter != null) {
+                                builder.queryParam("filter", filter);
                             }
                             return builder.build(session.getRepository());
                         })
@@ -185,6 +188,9 @@ public class TypeService {
                 page++;
             }
 
+            if (hasPattern) {
+                results.removeIf(type -> !NamePatternUtils.matches(pattern, type.getName()));
+            }
             return results;
 
         } catch (WebClientResponseException e) {

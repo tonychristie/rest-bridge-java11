@@ -4,6 +4,7 @@ import com.spire.restbridge.exception.ObjectNotFoundException;
 import com.spire.restbridge.exception.RestBridgeException;
 import com.spire.restbridge.model.GroupInfo;
 import com.spire.restbridge.model.UserInfo;
+import com.spire.restbridge.util.NamePatternUtils;
 import com.spire.restbridge.util.PropertyUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,6 +46,8 @@ public class UserGroupService {
         log.debug("Listing users via REST, pattern: {}", pattern);
 
         RestSessionHolder session = sessionService.getSession(sessionId);
+        boolean hasPattern = pattern != null && !pattern.isEmpty();
+        String filter = hasPattern ? NamePatternUtils.toFilter("user_name", pattern) : null;
 
         try {
             List<UserInfo> results = new ArrayList<>();
@@ -60,9 +63,8 @@ public class UserGroupService {
                                     .queryParam("inline", "true")
                                     .queryParam("items-per-page", "100")
                                     .queryParam("page", currentPage);
-                            if (pattern != null && !pattern.isEmpty()) {
-                                builder.queryParam("filter",
-                                        "starts-with(user_name,'" + pattern + "')");
+                            if (filter != null) {
+                                builder.queryParam("filter", filter);
                             }
                             return builder.build(session.getRepository());
                         })
@@ -93,6 +95,9 @@ public class UserGroupService {
                 page++;
             }
 
+            if (hasPattern) {
+                results.removeIf(user -> !NamePatternUtils.matches(pattern, user.getUserName()));
+            }
             return results;
 
         } catch (WebClientResponseException e) {
@@ -147,6 +152,8 @@ public class UserGroupService {
         log.debug("Listing groups via REST, pattern: {}", pattern);
 
         RestSessionHolder session = sessionService.getSession(sessionId);
+        boolean hasPattern = pattern != null && !pattern.isEmpty();
+        String filter = hasPattern ? NamePatternUtils.toFilter("group_name", pattern) : null;
 
         try {
             List<GroupInfo> results = new ArrayList<>();
@@ -162,9 +169,8 @@ public class UserGroupService {
                                     .queryParam("inline", "true")
                                     .queryParam("items-per-page", "100")
                                     .queryParam("page", currentPage);
-                            if (pattern != null && !pattern.isEmpty()) {
-                                builder.queryParam("filter",
-                                        "starts-with(group_name,'" + pattern + "')");
+                            if (filter != null) {
+                                builder.queryParam("filter", filter);
                             }
                             return builder.build(session.getRepository());
                         })
@@ -195,6 +201,9 @@ public class UserGroupService {
                 page++;
             }
 
+            if (hasPattern) {
+                results.removeIf(group -> !NamePatternUtils.matches(pattern, group.getGroupName()));
+            }
             return results;
 
         } catch (WebClientResponseException e) {

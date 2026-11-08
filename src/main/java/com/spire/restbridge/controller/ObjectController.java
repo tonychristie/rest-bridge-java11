@@ -103,7 +103,7 @@ public class ObjectController {
     )
     public ResponseEntity<List<TypeInfo>> listTypes(
             @Parameter(description = "Session ID") @RequestParam String sessionId,
-            @Parameter(description = "Type name pattern") @RequestParam(required = false) String pattern) {
+            @Parameter(description = "Type name pattern (supports * wildcard, e.g., dm_*)") @RequestParam(required = false) String pattern) {
         List<TypeInfo> types = typeService.listTypes(sessionId, pattern);
         return ResponseEntity.ok(types);
     }

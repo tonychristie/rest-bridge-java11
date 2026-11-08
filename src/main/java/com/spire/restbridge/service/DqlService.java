@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Service for DQL operations via Documentum REST Services.
@@ -36,6 +37,7 @@ public class DqlService {
     private static final int DEFAULT_ITEMS_PER_PAGE = 100;
     private static final int MAX_PAGES = 1000;
     private static final int TIMEOUT_SECONDS = 30;
+    private static final Pattern STRING_LITERAL = Pattern.compile("'(?:[^']|'')*'");
 
     private final SessionService sessionService;
 
@@ -331,7 +333,7 @@ public class DqlService {
             return false;
         }
 
-        String upperQuery = query.toUpperCase().trim();
+        String upperQuery = outerQueryText(query).toUpperCase().trim();
 
         // GROUP BY is the clearest indicator of an aggregate query
         if (upperQuery.contains("GROUP BY")) {
@@ -355,5 +357,32 @@ public class DqlService {
         }
 
         return false;
+    }
+
+    /**
+     * Empties every string literal, then removes the content of every parenthesis
+     * and keeps the parentheses, so COUNT(*) still reads as COUNT( and a subquery
+     * leaves nothing behind. Literals go first because they can hold a parenthesis.
+     */
+    private String outerQueryText(String query) {
+        String withoutLiterals = STRING_LITERAL.matcher(query).replaceAll("''");
+        StringBuilder outer = new StringBuilder(withoutLiterals.length());
+        int depth = 0;
+        for (char c : withoutLiterals.toCharArray()) {
+            if (c == '(') {
+                if (depth == 0) {
+                    outer.append(c);
+                }
+                depth++;
+            } else if (c == ')' && depth > 0) {
+                depth--;
+                if (depth == 0) {
+                    outer.append(c);
+                }
+            } else if (depth == 0) {
+                outer.append(c);
+            }
+        }
+        return outer.toString();
     }
 }

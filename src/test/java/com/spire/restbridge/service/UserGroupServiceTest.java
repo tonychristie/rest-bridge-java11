@@ -5,6 +5,7 @@ import com.spire.restbridge.model.GroupInfo;
 import com.spire.restbridge.model.UserInfo;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -13,6 +14,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -136,6 +138,41 @@ class UserGroupServiceTest {
 
             assertTrue(users.get(0).isSuperUser());
             assertFalse(users.get(1).isSuperUser());
+        }
+    }
+
+    @Test
+    void listUsers_wildcardPattern_filtersOnPrefixAndMatchesWholePattern() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{\"entries\": ["
+                    + "{\"content\": {\"properties\": {\"user_name\": \"test01\"}}},"
+                    + "{\"content\": {\"properties\": {\"user_name\": \"test02\"}}},"
+                    + "{\"content\": {\"properties\": {\"user_name\": \"test11\"}}}]}"));
+            server.start();
+            mockSession(server);
+
+            List<UserInfo> users = userGroupService.listUsers("session-1", "test*1");
+
+            RecordedRequest request = server.takeRequest();
+            assertEquals("starts-with(user_name,'test')",
+                    request.getRequestUrl().queryParameter("filter"));
+            assertEquals(List.of("test01", "test11"),
+                    users.stream().map(UserInfo::getUserName).collect(Collectors.toList()));
+        }
+    }
+
+    @Test
+    void listGroups_patternWithQuote_sendsDoubledQuoteInExactMatch() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{}"));
+            server.start();
+            mockSession(server);
+
+            List<GroupInfo> groups = userGroupService.listGroups("session-1", "o'b");
+
+            RecordedRequest request = server.takeRequest();
+            assertEquals("group_name='o''b'", request.getRequestUrl().queryParameter("filter"));
+            assertTrue(groups.isEmpty());
         }
     }
 
