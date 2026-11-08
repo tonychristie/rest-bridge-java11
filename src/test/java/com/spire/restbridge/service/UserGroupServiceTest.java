@@ -2,6 +2,7 @@ package com.spire.restbridge.service;
 
 import com.spire.restbridge.exception.SessionNotFoundException;
 import com.spire.restbridge.model.GroupInfo;
+import com.spire.restbridge.model.UserInfo;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,6 +12,7 @@ import org.mockito.MockitoAnnotations;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.io.IOException;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -109,6 +111,54 @@ class UserGroupServiceTest {
         assertThrows(SessionNotFoundException.class, () -> {
             userGroupService.getParentGroups("invalid-session", "childgroup");
         });
+    }
+
+    @Test
+    void getUser_superuserPrivilege_returnsSuperUser() throws IOException {
+        assertTrue(getUserWithPrivileges(16).isSuperUser());
+    }
+
+    @Test
+    void getUser_noPrivileges_returnsNotSuperUser() throws IOException {
+        assertFalse(getUserWithPrivileges(0).isSuperUser());
+    }
+
+    @Test
+    void listUsers_readsSuperUserFromPrivilegeBit() throws IOException {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{\"entries\": ["
+                    + "{\"content\": {\"properties\": {\"user_name\": \"dmadmin\", \"user_privileges\": 16}}},"
+                    + "{\"content\": {\"properties\": {\"user_name\": \"test01\", \"user_privileges\": 3}}}]}"));
+            server.start();
+            mockSession(server);
+
+            List<UserInfo> users = userGroupService.listUsers("session-1", null);
+
+            assertTrue(users.get(0).isSuperUser());
+            assertFalse(users.get(1).isSuperUser());
+        }
+    }
+
+    private UserInfo getUserWithPrivileges(int privileges) throws IOException {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{\"properties\": {\"user_name\": \"dmadmin\", "
+                    + "\"user_privileges\": " + privileges + "}}"));
+            server.start();
+            mockSession(server);
+
+            return userGroupService.getUser("session-1", "dmadmin");
+        }
+    }
+
+    private void mockSession(MockWebServer server) {
+        RestSessionHolder session = new RestSessionHolder();
+        session.setRepository("testrepo");
+        session.setWebClient(WebClient.create(server.url("/").toString()));
+        when(sessionService.getSession("session-1")).thenReturn(session);
+    }
+
+    private static MockResponse jsonResponse(String body) {
+        return new MockResponse().setHeader("Content-Type", "application/json").setBody(body);
     }
 
     @Test

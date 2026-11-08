@@ -3,7 +3,9 @@ package com.spire.restbridge.service;
 import com.spire.restbridge.dto.DqlRequest;
 import com.spire.restbridge.exception.AggregateQueryNotSupportedException;
 import com.spire.restbridge.exception.DqlException;
+import com.spire.restbridge.exception.DqlNotAvailableException;
 import com.spire.restbridge.exception.SessionNotFoundException;
+import com.spire.restbridge.model.QueryResult;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.BeforeEach;
@@ -71,6 +73,74 @@ class DqlServiceTest {
     @Test
     void executeQuery_queryUnknownStatus_throwsDqlExceptionWithBadGateway() throws Exception {
         assertEquals(HttpStatus.BAD_GATEWAY, queryStatus(520));
+    }
+
+    @Test
+    void executeQuery_checkRefused_throwsNotAvailableAndDoesNotCheckAgain() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(dqlRefusal());
+            server.start();
+            mockSession(server);
+
+            assertThrows(DqlNotAvailableException.class, () -> dqlService.executeQuery(queryRequest()));
+            assertThrows(DqlNotAvailableException.class, () -> dqlService.executeQuery(queryRequest()));
+            assertEquals(1, server.getRequestCount());
+        }
+    }
+
+    @Test
+    void executeQuery_checkServerError_throwsDqlExceptionAndChecksAgainOnNextQuery() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(500));
+            server.enqueue(jsonResponse("{}"));
+            server.enqueue(jsonResponse("{\"entries\": [{\"content\": {\"properties\": "
+                    + "{\"r_object_id\": \"0901234567890001\"}}}]}"));
+            server.start();
+            mockSession(server);
+
+            assertThrows(DqlException.class, () -> dqlService.executeQuery(queryRequest()));
+
+            QueryResult result = dqlService.executeQuery(queryRequest());
+            assertEquals(1, result.getRowCount());
+            assertEquals("0901234567890001", result.getRows().get(0).get("r_object_id"));
+            assertEquals(3, server.getRequestCount());
+        }
+    }
+
+    @Test
+    void executeQuery_queryRefused_throwsNotAvailable() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{}"));
+            server.enqueue(dqlRefusal());
+            server.start();
+            mockSession(server);
+
+            assertThrows(DqlNotAvailableException.class, () -> dqlService.executeQuery(queryRequest()));
+        }
+    }
+
+    private void mockSession(MockWebServer server) {
+        RestSessionHolder session = new RestSessionHolder();
+        session.setRepository("testrepo");
+        session.setWebClient(WebClient.create(server.url("/").toString()));
+        when(sessionService.getSession("session-1")).thenReturn(session);
+    }
+
+    private static DqlRequest queryRequest() {
+        DqlRequest request = new DqlRequest();
+        request.setSessionId("session-1");
+        request.setQuery("SELECT r_object_id FROM dm_document");
+        return request;
+    }
+
+    private static MockResponse jsonResponse(String body) {
+        return new MockResponse().setHeader("Content-Type", "application/json").setBody(body);
+    }
+
+    private static MockResponse dqlRefusal() {
+        return jsonResponse("{\"status\": 403, \"code\": \"E_DQL_QUERY_FAILED\", "
+                + "\"message\": \"Query failed.\", \"details\": \"Query Execution not allowed\"}")
+                .setResponseCode(403);
     }
 
     private HttpStatus queryStatus(int upstreamStatus) throws Exception {

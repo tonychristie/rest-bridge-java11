@@ -8,6 +8,7 @@ import com.spire.restbridge.model.AttributeValue;
 import com.spire.restbridge.model.ObjectInfo;
 import com.spire.restbridge.model.TypeInfo;
 import com.spire.restbridge.util.PermissionUtils;
+import com.spire.restbridge.util.PropertyUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -25,7 +26,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Service for object operations via Documentum REST Services.
@@ -47,20 +47,6 @@ public class ObjectService {
     private final SessionService sessionService;
     private final TypeService typeService;
     private final ObjectMapper objectMapper;
-
-    /** Cache of attribute metadata (type and repeating) by type name. */
-    private final Map<String, Map<String, AttrMeta>> attributeMetaCache = new ConcurrentHashMap<>();
-
-    /** Internal class to hold attribute metadata. */
-    private static class AttrMeta {
-        final String type;
-        final boolean repeating;
-
-        AttrMeta(String type, boolean repeating) {
-            this.type = type;
-            this.repeating = repeating;
-        }
-    }
 
     public ObjectService(SessionService sessionService, TypeService typeService, ObjectMapper objectMapper) {
         this.sessionService = sessionService;
@@ -92,7 +78,7 @@ public class ObjectService {
                 throw new ObjectNotFoundException("Object not found: " + objectId);
             }
 
-            return extractFromBatchResponse(batchResponse, objectId, sessionId);
+            return extractFromBatchResponse(batchResponse, objectId, session);
 
         } catch (WebClientResponseException.NotFound e) {
             throw new ObjectNotFoundException("Object not found: " + objectId);
@@ -203,7 +189,7 @@ public class ObjectService {
         try {
             // Get object type to normalize repeating attributes
             String objectType = getObjectType(session, objectId);
-            Map<String, Object> normalizedAttrs = normalizeAttributes(sessionId, objectType,
+            Map<String, Object> normalizedAttrs = normalizeAttributes(session, objectType,
                     request.getAttributes());
 
             Map<String, Object> payload = new HashMap<>();
@@ -228,7 +214,7 @@ public class ObjectService {
                 throw new RestBridgeException(ERROR_CODE, "No response from update", HttpStatus.BAD_GATEWAY);
             }
 
-            return extractFromWriteBatchResponse(batchResponse, objectId, "updateObject", sessionId);
+            return extractFromWriteBatchResponse(batchResponse, objectId, "updateObject", session);
 
         } catch (WebClientResponseException.NotFound e) {
             throw new ObjectNotFoundException("Object not found: " + objectId);
@@ -269,7 +255,7 @@ public class ObjectService {
                 throw new RestBridgeException(ERROR_CODE, "No response from checkout", HttpStatus.BAD_GATEWAY);
             }
 
-            return extractFromWriteBatchResponse(batchResponse, objectId, "checkout", sessionId);
+            return extractFromWriteBatchResponse(batchResponse, objectId, "checkout", session);
 
         } catch (WebClientResponseException.NotFound e) {
             throw new ObjectNotFoundException("Object not found: " + objectId);
@@ -352,7 +338,7 @@ public class ObjectService {
                 throw new RestBridgeException(ERROR_CODE, "No response from checkin", HttpStatus.BAD_GATEWAY);
             }
 
-            ObjectInfo objectInfo = extractObjectInfoWithSession(response, sessionId);
+            ObjectInfo objectInfo = extractObjectInfoWithSession(response, session);
             populatePermissions(session, objectInfo);
             return objectInfo;
 
@@ -379,7 +365,7 @@ public class ObjectService {
 
         try {
             // Normalize repeating attributes based on type definition
-            Map<String, Object> normalizedAttrs = normalizeAttributes(sessionId,
+            Map<String, Object> normalizedAttrs = normalizeAttributes(session,
                     request.getObjectType(), request.getAttributes());
 
             Map<String, Object> payload = new HashMap<>();
@@ -420,7 +406,7 @@ public class ObjectService {
                 throw new RestBridgeException(ERROR_CODE, "No response from create", HttpStatus.BAD_GATEWAY);
             }
 
-            ObjectInfo objectInfo = extractObjectInfoWithSession(response, sessionId);
+            ObjectInfo objectInfo = extractObjectInfoWithSession(response, session);
             populatePermissions(session, objectInfo);
             return objectInfo;
 
@@ -566,7 +552,7 @@ public class ObjectService {
             throw new RestBridgeException(ERROR_CODE, "No response from object type lookup", HttpStatus.BAD_GATEWAY);
         }
         Map<String, Object> properties = (Map<String, Object>) response.get("properties");
-        return (String) properties.get("r_object_type");
+        return PropertyUtils.str(properties, "r_object_type");
     }
 
     /**
@@ -590,10 +576,10 @@ public class ObjectService {
     }
 
     /**
-     * Get the set of repeating attribute names for a type, using cache.
+     * Get the set of repeating attribute names for a type.
      */
-    private Set<String> getRepeatingAttributes(String sessionId, String typeName) {
-        Map<String, AttrMeta> meta = getAttributeMetadataWithSession(sessionId, typeName);
+    private Set<String> getRepeatingAttributes(RestSessionHolder session, String typeName) {
+        Map<String, AttrMeta> meta = getAttributeMetadata(session, typeName);
         Set<String> repeating = new HashSet<>();
         for (Map.Entry<String, AttrMeta> entry : meta.entrySet()) {
             if (entry.getValue().repeating) {
@@ -607,13 +593,13 @@ public class ObjectService {
      * Normalize attributes for a given type, ensuring repeating attributes are lists.
      * If an attribute is repeating but the value is a scalar, wrap it in a list.
      */
-    private Map<String, Object> normalizeAttributes(String sessionId, String typeName,
+    private Map<String, Object> normalizeAttributes(RestSessionHolder session, String typeName,
                                                      Map<String, Object> attributes) {
         if (attributes == null || attributes.isEmpty()) {
             return attributes;
         }
 
-        Set<String> repeatingAttrs = getRepeatingAttributes(sessionId, typeName);
+        Set<String> repeatingAttrs = getRepeatingAttributes(session, typeName);
         if (repeatingAttrs.isEmpty()) {
             return attributes;
         }
@@ -634,7 +620,7 @@ public class ObjectService {
     }
 
     @SuppressWarnings("unchecked")
-    private ObjectInfo extractObjectInfoWithSession(Map<String, Object> response, String sessionId) {
+    private ObjectInfo extractObjectInfoWithSession(Map<String, Object> response, RestSessionHolder session) {
         Map<String, Object> content = (Map<String, Object>) response.get("content");
         if (content == null) {
             content = response;
@@ -645,17 +631,14 @@ public class ObjectService {
             properties = new HashMap<>();
         }
 
-        String objectId = (String) properties.getOrDefault("r_object_id", "");
-        String typeName = (String) properties.getOrDefault("r_object_type", "");
-        String name = (String) properties.getOrDefault("object_name", "");
+        String objectId = PropertyUtils.str(properties, "r_object_id");
+        String typeName = PropertyUtils.str(properties, "r_object_type");
+        String name = PropertyUtils.str(properties, "object_name");
 
-        // Pre-populate attribute metadata cache if we have a session
-        if (sessionId != null && !typeName.isEmpty()) {
-            getAttributeMetadataWithSession(sessionId, typeName);
-        }
-
-        // Build attributes with type metadata
-        Map<String, AttributeValue> attributes = buildAttributesWithMetadata(properties, typeName);
+        Map<String, AttrMeta> attrMeta = typeName.isEmpty()
+                ? Collections.emptyMap()
+                : getAttributeMetadata(session, typeName);
+        Map<String, AttributeValue> attributes = buildAttributesWithMetadata(properties, attrMeta);
 
         return ObjectInfo.builder()
                 .objectId(objectId)
@@ -669,12 +652,9 @@ public class ObjectService {
      * Build attributes map with type metadata from properties.
      */
     private Map<String, AttributeValue> buildAttributesWithMetadata(
-            Map<String, Object> properties, String typeName) {
+            Map<String, Object> properties, Map<String, AttrMeta> attrMeta) {
 
         Map<String, AttributeValue> attributes = new HashMap<>();
-
-        // Get attribute metadata for this type (uses cache)
-        Map<String, AttrMeta> attrMeta = getAttributeMetadata(typeName);
 
         for (Map.Entry<String, Object> entry : properties.entrySet()) {
             String attrName = entry.getKey();
@@ -769,46 +749,38 @@ public class ObjectService {
     }
 
     /**
-     * Get attribute metadata for a type, using cache. Uses stored session if available.
+     * Get attribute metadata for a type from the session's cache, looking the type up on a miss.
+     * A failed lookup is not cached, so the next request looks the type up again.
      */
-    private Map<String, AttrMeta> getAttributeMetadata(String typeName) {
-        Map<String, AttrMeta> cached = attributeMetaCache.get(typeName);
+    private Map<String, AttrMeta> getAttributeMetadata(RestSessionHolder session, String typeName) {
+        Map<String, Map<String, AttrMeta>> cache = session.getAttributeMetadata();
+        Map<String, AttrMeta> cached = cache.get(typeName);
         if (cached != null) {
             return cached;
         }
-        // Return empty if not cached and no session context
-        log.debug("No cached metadata for type {}, returning empty", typeName);
-        return Collections.emptyMap();
-    }
-
-    /**
-     * Get attribute metadata for a type with session context, populating cache.
-     */
-    private Map<String, AttrMeta> getAttributeMetadataWithSession(String sessionId, String typeName) {
-        return attributeMetaCache.computeIfAbsent(typeName, t -> {
-            try {
-                TypeInfo typeInfo = typeService.getTypeInfo(sessionId, t);
-                Map<String, AttrMeta> metadata = new HashMap<>();
-                for (TypeInfo.AttributeInfo attr : typeInfo.getAttributes()) {
-                    String normalizedType = normalizeTypeName(attr.getDataType());
-                    metadata.put(attr.getName(), new AttrMeta(normalizedType, attr.isRepeating()));
-                }
-                log.debug("Cached {} attributes for type {}", metadata.size(), t);
-                return metadata;
-            } catch (Exception e) {
-                log.warn("Failed to get type info for {}: {}", t, e.getMessage());
-                return Collections.emptyMap();
+        try {
+            TypeInfo typeInfo = typeService.getTypeInfo(session.getSessionInfo().getSessionId(), typeName);
+            Map<String, AttrMeta> metadata = new HashMap<>();
+            for (TypeInfo.AttributeInfo attr : typeInfo.getAttributes()) {
+                String normalizedType = normalizeTypeName(attr.getDataType());
+                metadata.put(attr.getName(), new AttrMeta(normalizedType, attr.isRepeating()));
             }
-        });
+            cache.put(typeName, metadata);
+            log.debug("Cached {} attributes for type {}", metadata.size(), typeName);
+            return metadata;
+        } catch (Exception e) {
+            log.warn("Failed to get type info for {}: {}", typeName, e.getMessage());
+            return Collections.emptyMap();
+        }
     }
 
     /**
      * Extract ObjectInfo from list entry format (cabinets, folder contents).
      */
     private ObjectInfo extractEntryInfo(Map<String, Object> entry) {
-        String title = (String) entry.getOrDefault("title", "");
-        String summary = (String) entry.getOrDefault("summary", "");
-        String id = (String) entry.getOrDefault("id", "");
+        String title = PropertyUtils.str(entry, "title");
+        String summary = PropertyUtils.str(entry, "summary");
+        String id = PropertyUtils.str(entry, "id");
 
         // Extract object ID from id URL
         String objectId = "";
@@ -984,7 +956,7 @@ public class ObjectService {
      */
     @SuppressWarnings("unchecked")
     private ObjectInfo extractFromBatchResponse(Map<String, Object> batchResponse, String objectId,
-                                                 String sessionId) {
+                                                 RestSessionHolder session) {
         List<Map<String, Object>> operations =
                 (List<Map<String, Object>>) batchResponse.get("operations");
 
@@ -1012,7 +984,7 @@ public class ObjectService {
                 if (entity != null && status != null && status == 200) {
                     try {
                         Map<String, Object> objectData = objectMapper.readValue(entity, Map.class);
-                        objectInfo = extractObjectInfoWithSession(objectData, sessionId);
+                        objectInfo = extractObjectInfoWithSession(objectData, session);
                     } catch (JsonProcessingException e) {
                         log.warn("Failed to parse object response: {}", e.getMessage());
                     }
@@ -1042,7 +1014,7 @@ public class ObjectService {
     @SuppressWarnings("unchecked")
     private ObjectInfo extractFromWriteBatchResponse(
             Map<String, Object> batchResponse, String objectId, String writeOperationId,
-            String sessionId) {
+            RestSessionHolder session) {
 
         List<Map<String, Object>> operations =
                 (List<Map<String, Object>>) batchResponse.get("operations");
@@ -1076,7 +1048,7 @@ public class ObjectService {
                 if (entity != null && status != null && (status == 200 || status == 201)) {
                     try {
                         Map<String, Object> objectData = objectMapper.readValue(entity, Map.class);
-                        objectInfo = extractObjectInfoWithSession(objectData, sessionId);
+                        objectInfo = extractObjectInfoWithSession(objectData, session);
                     } catch (JsonProcessingException e) {
                         log.warn("Failed to parse write response: {}", e.getMessage());
                     }
