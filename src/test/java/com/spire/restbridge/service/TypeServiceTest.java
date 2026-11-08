@@ -1,5 +1,6 @@
 package com.spire.restbridge.service;
 
+import com.spire.restbridge.config.RestBridgeProperties;
 import com.spire.restbridge.model.TypeInfo;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -26,7 +27,7 @@ class TypeServiceTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-        typeService = new TypeService(sessionService);
+        typeService = new TypeService(sessionService, new RestServicesClient(new RestBridgeProperties()));
     }
 
     @Test

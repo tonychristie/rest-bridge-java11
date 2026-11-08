@@ -1,5 +1,6 @@
 package com.spire.restbridge.service;
 
+import com.spire.restbridge.config.RestBridgeProperties;
 import com.spire.restbridge.exception.SessionNotFoundException;
 import com.spire.restbridge.model.GroupInfo;
 import com.spire.restbridge.model.UserInfo;
@@ -32,7 +33,7 @@ class UserGroupServiceTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-        userGroupService = new UserGroupService(sessionService);
+        userGroupService = new UserGroupService(sessionService, new RestServicesClient(new RestBridgeProperties()));
     }
 
     @Test

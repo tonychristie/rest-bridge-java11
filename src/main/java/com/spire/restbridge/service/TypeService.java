@@ -1,19 +1,18 @@
 package com.spire.restbridge.service;
 
 import com.spire.restbridge.exception.ObjectNotFoundException;
-import com.spire.restbridge.exception.RestBridgeException;
 import com.spire.restbridge.model.TypeInfo;
 import com.spire.restbridge.util.NamePatternUtils;
 import com.spire.restbridge.util.PropertyUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -29,13 +28,12 @@ import java.util.Set;
 public class TypeService {
 
     private static final Logger log = LoggerFactory.getLogger(TypeService.class);
-    private static final String ERROR_CODE = "REST_ERROR";
-    private static final int TIMEOUT_SECONDS = 60;
-
     private final SessionService sessionService;
+    private final RestServicesClient client;
 
-    public TypeService(SessionService sessionService) {
+    public TypeService(SessionService sessionService, RestServicesClient client) {
         this.sessionService = sessionService;
+        this.client = client;
     }
 
     /**
@@ -46,7 +44,7 @@ public class TypeService {
 
         RestSessionHolder session = sessionService.getSession(sessionId);
 
-        try {
+        return client.call("Failed to get type", "Type not found: " + typeName, () -> {
             Map<String, Object> response = fetchTypeRaw(session, typeName);
             if (response == null) {
                 throw new ObjectNotFoundException("Type not found: " + typeName);
@@ -56,31 +54,15 @@ public class TypeService {
             Set<String> inheritedAttrNames = getInheritedAttributeNames(session, response);
 
             return extractTypeInfo(response, inheritedAttrNames);
-
-        } catch (WebClientResponseException.NotFound e) {
-            throw new ObjectNotFoundException("Type not found: " + typeName);
-        } catch (WebClientResponseException e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to get type: " + e.getResponseBodyAsString(), e);
-        } catch (ObjectNotFoundException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to get type: " + e.getMessage(), e);
-        }
+        });
     }
 
     /**
      * Fetch raw type data from REST API.
      */
-    @SuppressWarnings("unchecked")
     private Map<String, Object> fetchTypeRaw(RestSessionHolder session, String typeName) {
-        return session.getWebClient().get()
-                .uri("/repositories/{repo}/types/{typeName}",
-                        session.getRepository(), typeName)
-                .retrieve()
-                .bodyToMono(Map.class)
-                .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+        return client.get(session, "/repositories/{repo}/types/{typeName}",
+                session.getRepository(), typeName);
     }
 
     /**
@@ -140,79 +122,34 @@ public class TypeService {
         boolean hasPattern = pattern != null && !pattern.isEmpty();
         String filter = hasPattern ? NamePatternUtils.toFilter("name", pattern) : null;
 
-        try {
+        Map<String, String> queryParams = new LinkedHashMap<>();
+        queryParams.put("inline", "true");
+        Map<String, Object> uriVariables = new HashMap<>();
+        uriVariables.put("repo", session.getRepository());
+        if (filter != null) {
+            queryParams.put("filter", "{filter}");
+            uriVariables.put("filter", filter);
+        }
+
+        return client.call("Failed to list types", null, () -> {
             List<TypeInfo> results = new ArrayList<>();
-            int page = 1;
-            boolean hasMore = true;
 
-            while (hasMore) {
-                final int currentPage = page;
+            for (Map<String, Object> entry : client.getAllPages(session, "/repositories/{repo}/types",
+                    queryParams, uriVariables)) {
                 @SuppressWarnings("unchecked")
-                Map<String, Object> response = session.getWebClient().get()
-                        .uri(uriBuilder -> {
-                            var builder = uriBuilder.path("/repositories/{repo}/types")
-                                    .queryParam("inline", "true")
-                                    .queryParam("items-per-page", "100")
-                                    .queryParam("page", currentPage);
-                            if (filter != null) {
-                                builder.queryParam("filter", filter);
-                            }
-                            return builder.build(session.getRepository());
-                        })
-                        .retrieve()
-                        .bodyToMono(Map.class)
-                        .block(Duration.ofSeconds(TIMEOUT_SECONDS));
-
-                if (response == null) {
-                    break;
+                Map<String, Object> content = (Map<String, Object>) entry.get("content");
+                if (content != null) {
+                    // Skip inherited attr calculation - redundant for list view
+                    // (TypeCache ignores them, getTypeInfo() recalculates on demand)
+                    results.add(extractTypeInfo(content, Collections.emptySet()));
                 }
-
-                @SuppressWarnings("unchecked")
-                List<Map<String, Object>> entries =
-                        (List<Map<String, Object>>) response.get("entries");
-
-                if (entries != null && !entries.isEmpty()) {
-                    for (Map<String, Object> entry : entries) {
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> content =
-                                (Map<String, Object>) entry.get("content");
-                        if (content != null) {
-                            // Skip inherited attr calculation - redundant for list view
-                            // (TypeCache ignores them, getTypeInfo() recalculates on demand)
-                            results.add(extractTypeInfo(content, Collections.emptySet()));
-                        }
-                    }
-                }
-
-                hasMore = hasNextPage(response);
-                page++;
             }
 
             if (hasPattern) {
                 results.removeIf(type -> !NamePatternUtils.matches(pattern, type.getName()));
             }
             return results;
-
-        } catch (WebClientResponseException e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to list types: " + e.getResponseBodyAsString(), e);
-        } catch (Exception e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to list types: " + e.getMessage(), e);
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private boolean hasNextPage(Map<String, Object> response) {
-        List<Map<String, Object>> links = (List<Map<String, Object>>) response.get("links");
-        if (links != null) {
-            for (Map<String, Object> link : links) {
-                if ("next".equals(link.get("rel"))) {
-                    return true;
-                }
-            }
-        }
-        return false;
+        });
     }
 
     @SuppressWarnings("unchecked")
