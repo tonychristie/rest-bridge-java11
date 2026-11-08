@@ -9,7 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -126,7 +126,7 @@ public class DqlService {
                     .executionTimeMs(executionTime)
                     .build();
 
-        } catch (WebClientResponseException e) {
+        } catch (RestClientResponseException e) {
             if (isDqlRefusal(e)) {
                 session.setDqlAvailable(false);
                 session.setDqlChecked(true);
@@ -164,7 +164,7 @@ public class DqlService {
             session.setDqlChecked(true);
             log.info("DQL is available for this session");
 
-        } catch (WebClientResponseException e) {
+        } catch (RestClientResponseException e) {
             if (!isDqlRefusal(e)) {
                 throw new DqlException("DQL availability check failed: " + e.getResponseBodyAsString(), e);
             }
@@ -180,7 +180,7 @@ public class DqlService {
      * True when REST Services refuses DQL for the user (403 E_DQL_QUERY_FAILED)
      * or reports DQL as disabled.
      */
-    private boolean isDqlRefusal(WebClientResponseException e) {
+    private boolean isDqlRefusal(RestClientResponseException e) {
         int status = e.getRawStatusCode();
         String body = e.getResponseBodyAsString();
         if (status == 403) {

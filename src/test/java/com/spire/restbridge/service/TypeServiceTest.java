@@ -1,6 +1,5 @@
 package com.spire.restbridge.service;
 
-import com.spire.restbridge.config.RestBridgeProperties;
 import com.spire.restbridge.model.TypeInfo;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -9,7 +8,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
-import org.springframework.web.reactive.function.client.WebClient;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -27,7 +25,7 @@ class TypeServiceTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-        typeService = new TypeService(sessionService, new RestServicesClient(new RestBridgeProperties()));
+        typeService = new TypeService(sessionService, new RestServicesClient());
     }
 
     @Test
@@ -42,9 +40,9 @@ class TypeServiceTest {
                     + "{\"content\": {\"name\": \"dm_folder_x\"}}]}"));
             server.start();
 
-            RestSessionHolder session = new RestSessionHolder();
+            RestSessionHolder session = SessionService.createSessionHolder(server.url("/").toString(),
+                    "test01", "secret", 30);
             session.setRepository("testrepo");
-            session.setWebClient(WebClient.create(server.url("/").toString()));
             when(sessionService.getSession("session-1")).thenReturn(session);
 
             List<TypeInfo> types = typeService.listTypes("session-1", "*_folder");

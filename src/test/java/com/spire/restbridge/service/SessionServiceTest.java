@@ -70,6 +70,20 @@ class SessionServiceTest {
         assertEquals(HttpStatus.NOT_FOUND, connectStatus(404));
     }
 
+    @Test
+    void connect_unreachableEndpoint_throwsConnectionErrorWithServiceUnavailable() {
+        ConnectRequest request = new ConnectRequest();
+        request.setEndpoint("http://127.0.0.1:1/dctm-rest");
+        request.setRepository("testrepo");
+        request.setUsername("test01");
+        request.setPassword("secret");
+
+        ConnectionException ex = assertThrows(ConnectionException.class, () -> sessionService.connect(request));
+        assertEquals("CONNECTION_ERROR", ex.getCode());
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
+        assertEquals("Cannot connect to REST endpoint: http://127.0.0.1:1/dctm-rest", ex.getMessage());
+    }
+
     private HttpStatus connectStatus(int upstreamStatus) throws Exception {
         try (MockWebServer server = new MockWebServer()) {
             server.enqueue(new MockResponse().setResponseCode(upstreamStatus));

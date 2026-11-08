@@ -1,6 +1,5 @@
 package com.spire.restbridge.service;
 
-import com.spire.restbridge.config.RestBridgeProperties;
 import com.spire.restbridge.dto.DqlRequest;
 import com.spire.restbridge.exception.AggregateQueryNotSupportedException;
 import com.spire.restbridge.exception.DqlException;
@@ -18,7 +17,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.reactive.function.client.WebClient;
 
 import java.io.IOException;
 import java.util.List;
@@ -42,7 +40,7 @@ class DqlServiceTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-        dqlService = new DqlService(sessionService, new RestServicesClient(new RestBridgeProperties()));
+        dqlService = new DqlService(sessionService, new RestServicesClient());
     }
 
     @Test
@@ -211,9 +209,9 @@ class DqlServiceTest {
     }
 
     private void mockSession(MockWebServer server) {
-        RestSessionHolder session = new RestSessionHolder();
+        RestSessionHolder session = SessionService.createSessionHolder(server.url("/").toString(),
+                "test01", "secret", 30);
         session.setRepository("testrepo");
-        session.setWebClient(WebClient.create(server.url("/").toString()));
         when(sessionService.getSession("session-1")).thenReturn(session);
     }
 
@@ -241,9 +239,9 @@ class DqlServiceTest {
                     .setHeader("Content-Type", "application/json")
                     .setBody("{\"code\": \"E_INVALID_QUERY_ERROR\"}"));
             server.start();
-            RestSessionHolder session = new RestSessionHolder();
+            RestSessionHolder session = SessionService.createSessionHolder(server.url("/").toString(),
+                    "test01", "secret", 30);
             session.setRepository("testrepo");
-            session.setWebClient(WebClient.create(server.url("/").toString()));
             when(sessionService.getSession("session-1")).thenReturn(session);
 
             DqlRequest request = new DqlRequest();

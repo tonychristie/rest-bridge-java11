@@ -1,20 +1,15 @@
 package com.spire.restbridge.exception;
 
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.client.WebClientRequestException;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientResponseException;
 
-import java.net.URI;
-import java.time.Duration;
-import java.util.concurrent.TimeUnit;
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -110,18 +105,26 @@ class ExceptionTest {
         assertEquals(HttpStatus.BAD_GATEWAY, RestBridgeException.statusOf(responseException(status)));
     }
 
-    @Test
-    void statusOf_unknownUpstreamStatus_returnsBadGateway() {
-        assertEquals(HttpStatus.BAD_GATEWAY, RestBridgeException.statusOf(responseException(499)));
+    @ParameterizedTest
+    @ValueSource(ints = {499, 520})
+    void statusOf_unknownUpstreamStatus_returnsBadGateway(int status) {
+        assertEquals(HttpStatus.BAD_GATEWAY, RestBridgeException.statusOf(responseException(status)));
     }
 
     @Test
-    void statusOf_requestException_returnsServiceUnavailable() {
-        WebClientRequestException cause = new WebClientRequestException(
-                new java.net.ConnectException("Connection refused"), HttpMethod.GET,
-                URI.create("http://127.0.0.1:1/dctm-rest"), HttpHeaders.EMPTY);
+    void statusOf_connectionFailure_returnsServiceUnavailable() {
+        ResourceAccessException cause = new ResourceAccessException("I/O error",
+                new ConnectException("Connection refused"));
 
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, RestBridgeException.statusOf(cause));
+    }
+
+    @Test
+    void statusOf_socketTimeout_returnsGatewayTimeout() {
+        ResourceAccessException cause = new ResourceAccessException("I/O error",
+                new SocketTimeoutException("Read timed out"));
+
+        assertEquals(HttpStatus.GATEWAY_TIMEOUT, RestBridgeException.statusOf(cause));
     }
 
     @Test
@@ -136,23 +139,8 @@ class ExceptionTest {
                 RestBridgeException.statusOf(new RuntimeException("Unexpected")));
     }
 
-    @Test
-    void statusOf_blockTimeout_returnsGatewayTimeout() throws Exception {
-        try (MockWebServer server = new MockWebServer()) {
-            server.enqueue(new MockResponse().setBody("{}").setBodyDelay(5, TimeUnit.SECONDS));
-            server.start();
-            WebClient webClient = WebClient.create(server.url("/").toString());
-
-            Exception thrown = assertThrows(Exception.class, () -> webClient.get()
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block(Duration.ofMillis(200)));
-
-            assertEquals(HttpStatus.GATEWAY_TIMEOUT, RestBridgeException.statusOf(thrown));
-        }
-    }
-
-    private static WebClientResponseException responseException(int status) {
-        return WebClientResponseException.create(status, "status " + status, HttpHeaders.EMPTY, new byte[0], null);
+    private static RestClientResponseException responseException(int status) {
+        return new RestClientResponseException("status " + status, status, "status " + status,
+                HttpHeaders.EMPTY, new byte[0], null);
     }
 }
