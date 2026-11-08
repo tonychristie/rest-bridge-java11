@@ -9,10 +9,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -34,15 +32,15 @@ public class DqlService {
     private static final Logger log = LoggerFactory.getLogger(DqlService.class);
     private static final MediaType DOCUMENTUM_MEDIA_TYPE =
             MediaType.parseMediaType("application/vnd.emc.documentum+json");
-    private static final int DEFAULT_ITEMS_PER_PAGE = 100;
-    private static final int MAX_PAGES = 1000;
-    private static final int TIMEOUT_SECONDS = 30;
+    private static final int ITEMS_PER_PAGE = 100;
     private static final Pattern STRING_LITERAL = Pattern.compile("'(?:[^']|'')*'");
 
     private final SessionService sessionService;
+    private final RestServicesClient client;
 
-    public DqlService(SessionService sessionService) {
+    public DqlService(SessionService sessionService, RestServicesClient client) {
         this.sessionService = sessionService;
+        this.client = client;
     }
 
     /**
@@ -77,15 +75,15 @@ public class DqlService {
 
         try {
             List<QueryResult.ColumnInfo> columns = new ArrayList<>();
-            List<Map<String, Object>> allRows = new ArrayList<>();
-            int itemsPerPage = request.getMaxRows() > 0 ? request.getMaxRows() : DEFAULT_ITEMS_PER_PAGE;
-            int page = 1;
-            boolean hasMore = true;
-            int pagesFetched = 0;
+            List<Map<String, Object>> rows = new ArrayList<>();
+            int maxRows = request.getMaxRows();
+            int page = request.getStartRow() / ITEMS_PER_PAGE + 1;
+            int skip = request.getStartRow() % ITEMS_PER_PAGE;
+            boolean hasMore = false;
 
-            while (hasMore && pagesFetched < MAX_PAGES) {
+            while (true) {
                 Map<String, Object> response = executeDqlRequest(
-                        session, request.getQuery(), itemsPerPage, page);
+                        session, request.getQuery(), ITEMS_PER_PAGE, page);
 
                 if (response == null) {
                     break;
@@ -96,32 +94,34 @@ public class DqlService {
                     columns = extractColumns(response);
                 }
 
-                // Add rows from this page
                 List<Map<String, Object>> pageRows = extractRows(response);
-                allRows.addAll(pageRows);
+                int index = skip;
+                while (index < pageRows.size() && rows.size() < maxRows) {
+                    rows.add(pageRows.get(index));
+                    index++;
+                }
+                boolean nextPage = RestServicesClient.hasNextPage(response);
 
-                // Check for more pages
-                hasMore = hasNextPage(response);
+                log.debug("Fetched page {}, rows so far: {}", page, rows.size());
+
+                if (rows.size() >= maxRows) {
+                    hasMore = index < pageRows.size() || nextPage;
+                    break;
+                }
+                if (!nextPage) {
+                    break;
+                }
                 page++;
-                pagesFetched++;
-
-                log.debug("Fetched page {}, rows so far: {}, hasMore: {}",
-                        pagesFetched, allRows.size(), hasMore);
-            }
-
-            if (pagesFetched >= MAX_PAGES) {
-                log.warn("Reached maximum page limit ({}) for query: {}",
-                        MAX_PAGES, request.getQuery());
+                skip = 0;
             }
 
             long executionTime = System.currentTimeMillis() - startTime;
-            log.debug("DQL query returned {} rows in {}ms (fetched {} pages)",
-                    allRows.size(), executionTime, pagesFetched);
+            log.debug("DQL query returned {} rows in {}ms", rows.size(), executionTime);
 
             return QueryResult.builder()
                     .columns(columns)
-                    .rows(allRows)
-                    .rowCount(allRows.size())
+                    .rows(rows)
+                    .rowCount(rows.size())
                     .hasMore(hasMore)
                     .executionTimeMs(executionTime)
                     .build();
@@ -207,26 +207,18 @@ public class DqlService {
         return session.isDqlAvailable();
     }
 
-    @SuppressWarnings("unchecked")
     private Map<String, Object> executeDqlRequest(
             RestSessionHolder session,
             String query,
             int itemsPerPage,
             int page) {
 
-        WebClient webClient = session.getWebClient();
-
-        return webClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/repositories/{repo}")
-                        .queryParam("dql", query)
-                        .queryParam("items-per-page", itemsPerPage)
-                        .queryParam("page", page)
-                        .build(session.getRepository()))
-                .accept(DOCUMENTUM_MEDIA_TYPE)
-                .retrieve()
-                .bodyToMono(Map.class)
-                .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+        return client.get(session, DOCUMENTUM_MEDIA_TYPE, uriBuilder -> uriBuilder
+                .path("/repositories/{repo}")
+                .queryParam("dql", query)
+                .queryParam("items-per-page", itemsPerPage)
+                .queryParam("page", page)
+                .build(session.getRepository()));
     }
 
     @SuppressWarnings("unchecked")
@@ -283,16 +275,6 @@ public class DqlService {
         }
 
         return rows;
-    }
-
-    @SuppressWarnings("unchecked")
-    private boolean hasNextPage(Map<String, Object> response) {
-        List<Map<String, Object>> links = (List<Map<String, Object>>) response.get("links");
-        if (links == null) {
-            return false;
-        }
-        return links.stream()
-                .anyMatch(link -> "next".equals(link.get("rel")));
     }
 
     private String inferType(Object value) {

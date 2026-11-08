@@ -1,13 +1,16 @@
 package com.spire.restbridge.service;
 
+import com.spire.restbridge.config.RestBridgeProperties;
 import com.spire.restbridge.dto.DqlRequest;
 import com.spire.restbridge.exception.AggregateQueryNotSupportedException;
 import com.spire.restbridge.exception.DqlException;
 import com.spire.restbridge.exception.DqlNotAvailableException;
 import com.spire.restbridge.exception.SessionNotFoundException;
 import com.spire.restbridge.model.QueryResult;
+import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -16,6 +19,12 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.reactive.function.client.WebClient;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -33,7 +42,7 @@ class DqlServiceTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-        dqlService = new DqlService(sessionService);
+        dqlService = new DqlService(sessionService, new RestServicesClient(new RestBridgeProperties()));
     }
 
     @Test
@@ -117,6 +126,88 @@ class DqlServiceTest {
 
             assertThrows(DqlNotAvailableException.class, () -> dqlService.executeQuery(queryRequest()));
         }
+    }
+
+    @Test
+    void executeQuery_noMaxRowsOrStartRow_returnsFirstHundredRowsFromOnePage() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            List<Integer> pagesRead = serveRows(server, 250);
+            mockSession(server);
+
+            QueryResult result = dqlService.executeQuery(DqlRequest.builder()
+                    .sessionId("session-1").query("SELECT r_object_id FROM dm_document").build());
+
+            assertEquals(rowNumbers(1, 100), rowNumbersOf(result));
+            assertTrue(result.isHasMore());
+            assertEquals(List.of(1), pagesRead);
+        }
+    }
+
+    @Test
+    void executeQuery_maxRowsFiveFromRowThree_returnsRowsFourToEight() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            serveRows(server, 250);
+            mockSession(server);
+
+            QueryResult result = dqlService.executeQuery(DqlRequest.builder()
+                    .sessionId("session-1").query("SELECT r_object_id FROM dm_document")
+                    .maxRows(5).startRow(3).build());
+
+            assertEquals(rowNumbers(4, 8), rowNumbersOf(result));
+            assertTrue(result.isHasMore());
+        }
+    }
+
+    @Test
+    void executeQuery_startRowInSecondPage_readsLastTwoPagesAndHasNoMore() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            List<Integer> pagesRead = serveRows(server, 250);
+            mockSession(server);
+
+            QueryResult result = dqlService.executeQuery(DqlRequest.builder()
+                    .sessionId("session-1").query("SELECT r_object_id FROM dm_document")
+                    .maxRows(100).startRow(150).build());
+
+            assertEquals(rowNumbers(151, 250), rowNumbersOf(result));
+            assertFalse(result.isHasMore());
+            assertEquals(List.of(2, 3), pagesRead);
+        }
+    }
+
+    /**
+     * Serves the availability check, then a result of {@code total} rows in pages of 100.
+     * Row n has the property row = n. Returns the query pages read, in order.
+     */
+    private static List<Integer> serveRows(MockWebServer server, int total) throws IOException {
+        List<Integer> pagesRead = new CopyOnWriteArrayList<>();
+        server.setDispatcher(new Dispatcher() {
+            @Override
+            public MockResponse dispatch(RecordedRequest request) {
+                if (request.getRequestUrl().queryParameter("dql").contains("dm_docbase_config")) {
+                    return jsonResponse("{}");
+                }
+                int itemsPerPage = Integer.parseInt(request.getRequestUrl().queryParameter("items-per-page"));
+                int page = Integer.parseInt(request.getRequestUrl().queryParameter("page"));
+                pagesRead.add(page);
+                int first = (page - 1) * itemsPerPage + 1;
+                int last = Math.min(page * itemsPerPage, total);
+                String entries = IntStream.rangeClosed(first, last)
+                        .mapToObj(n -> "{\"content\": {\"properties\": {\"row\": " + n + "}}}")
+                        .collect(Collectors.joining(","));
+                String links = last < total ? ", \"links\": [{\"rel\": \"next\", \"href\": \"next-page\"}]" : "";
+                return jsonResponse("{\"entries\": [" + entries + "]" + links + "}");
+            }
+        });
+        server.start();
+        return pagesRead;
+    }
+
+    private static List<Integer> rowNumbers(int first, int last) {
+        return IntStream.rangeClosed(first, last).boxed().collect(Collectors.toList());
+    }
+
+    private static List<Integer> rowNumbersOf(QueryResult result) {
+        return result.getRows().stream().map(row -> (Integer) row.get("row")).collect(Collectors.toList());
     }
 
     private void mockSession(MockWebServer server) {
