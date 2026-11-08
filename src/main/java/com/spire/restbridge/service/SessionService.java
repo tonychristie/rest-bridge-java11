@@ -11,6 +11,7 @@ import javax.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -52,7 +53,7 @@ public class SessionService {
 
         String endpoint = request.getEndpoint();
         if (endpoint == null || endpoint.isBlank()) {
-            throw new ConnectionException("REST endpoint URL is required");
+            throw new ConnectionException("REST endpoint URL is required", HttpStatus.BAD_REQUEST);
         }
 
         // Remove trailing slash
@@ -87,7 +88,7 @@ public class SessionService {
                     .block(Duration.ofSeconds(properties.getTimeoutSeconds()));
 
             if (repoResponse == null) {
-                throw new ConnectionException("No response from REST endpoint");
+                throw new ConnectionException("No response from REST endpoint", HttpStatus.BAD_GATEWAY);
             }
 
             // Generate session ID
@@ -122,16 +123,16 @@ public class SessionService {
                     .build();
 
         } catch (WebClientResponseException.Unauthorized e) {
-            throw new ConnectionException("Authentication failed. Check your credentials.");
+            throw new ConnectionException("Authentication failed. Check your credentials.", e);
         } catch (WebClientResponseException.NotFound e) {
-            throw new ConnectionException("Repository \"" + request.getRepository() + "\" not found.");
+            throw new ConnectionException("Repository \"" + request.getRepository() + "\" not found.", e);
         } catch (WebClientResponseException e) {
-            throw new ConnectionException("REST connection failed: " + e.getStatusCode() + " - " + e.getResponseBodyAsString());
+            throw new ConnectionException("REST connection failed: " + e.getStatusCode() + " - " + e.getResponseBodyAsString(), e);
         } catch (ConnectionException e) {
             throw e;
         } catch (Exception e) {
             if (e.getCause() instanceof java.net.ConnectException) {
-                throw new ConnectionException("Cannot connect to REST endpoint: " + endpoint);
+                throw new ConnectionException("Cannot connect to REST endpoint: " + endpoint, e);
             }
             throw new ConnectionException("REST connection failed: " + e.getMessage(), e);
         }

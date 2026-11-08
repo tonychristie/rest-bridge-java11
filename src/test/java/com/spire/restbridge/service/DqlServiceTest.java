@@ -2,13 +2,18 @@ package com.spire.restbridge.service;
 
 import com.spire.restbridge.dto.DqlRequest;
 import com.spire.restbridge.exception.AggregateQueryNotSupportedException;
+import com.spire.restbridge.exception.DqlException;
 import com.spire.restbridge.exception.SessionNotFoundException;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.reactive.function.client.WebClient;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -51,6 +56,38 @@ class DqlServiceTest {
         assertThrows(SessionNotFoundException.class, () -> {
             dqlService.isDqlAvailable("invalid-session");
         });
+    }
+
+    @Test
+    void executeQuery_queryBadRequest_throwsDqlExceptionWithBadRequest() throws Exception {
+        assertEquals(HttpStatus.BAD_REQUEST, queryStatus(400));
+    }
+
+    @Test
+    void executeQuery_queryServerError_throwsDqlExceptionWithBadGateway() throws Exception {
+        assertEquals(HttpStatus.BAD_GATEWAY, queryStatus(500));
+    }
+
+    private HttpStatus queryStatus(int upstreamStatus) throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody("{}"));
+            server.enqueue(new MockResponse().setResponseCode(upstreamStatus)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"code\": \"E_INVALID_QUERY_ERROR\"}"));
+            server.start();
+            RestSessionHolder session = new RestSessionHolder();
+            session.setRepository("testrepo");
+            session.setWebClient(WebClient.create(server.url("/").toString()));
+            when(sessionService.getSession("session-1")).thenReturn(session);
+
+            DqlRequest request = new DqlRequest();
+            request.setSessionId("session-1");
+            request.setQuery("SELECT r_object_id FROM no_such_type");
+
+            DqlException ex = assertThrows(DqlException.class, () -> dqlService.executeQuery(request));
+            assertEquals(2, server.getRequestCount());
+            return ex.getStatus();
+        }
     }
 
     @ParameterizedTest

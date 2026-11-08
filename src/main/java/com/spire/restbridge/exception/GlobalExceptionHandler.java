@@ -19,53 +19,15 @@ public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    @ExceptionHandler(ConnectionException.class)
-    public ResponseEntity<ErrorResponse> handleConnectionException(ConnectionException e) {
-        log.warn("Connection error: {}", e.getMessage());
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
-    }
-
-    @ExceptionHandler(SessionNotFoundException.class)
-    public ResponseEntity<ErrorResponse> handleSessionNotFoundException(SessionNotFoundException e) {
-        log.warn("Session not found: {}", e.getMessage());
-        return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
-    }
-
-    @ExceptionHandler(ObjectNotFoundException.class)
-    public ResponseEntity<ErrorResponse> handleObjectNotFoundException(ObjectNotFoundException e) {
-        log.warn("Object not found: {}", e.getMessage());
-        return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
-    }
-
-    @ExceptionHandler(AggregateQueryNotSupportedException.class)
-    public ResponseEntity<ErrorResponse> handleAggregateQueryNotSupportedException(
-            AggregateQueryNotSupportedException e) {
-        log.warn("Aggregate query not supported: {}", e.getMessage());
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ErrorResponse.of("AGGREGATE_QUERY_NOT_SUPPORTED", e.getMessage()));
-    }
-
-    @ExceptionHandler(DqlException.class)
-    public ResponseEntity<ErrorResponse> handleDqlException(DqlException e) {
-        log.warn("DQL error: {}", e.getMessage());
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
-    }
-
-    @ExceptionHandler(DqlNotAvailableException.class)
-    public ResponseEntity<ErrorResponse> handleDqlNotAvailableException(DqlNotAvailableException e) {
-        log.warn("DQL not available: {}", e.getMessage());
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
-    }
-
     @ExceptionHandler(RestBridgeException.class)
     public ResponseEntity<ErrorResponse> handleRestBridgeException(RestBridgeException e) {
-        log.error("REST Bridge error: {}", e.getMessage(), e);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+        HttpStatus status = e.getStatus();
+        if (status.is5xxServerError()) {
+            log.error("{} {}: {}", status.value(), e.getCode(), e.getMessage(), e);
+        } else {
+            log.warn("{} {}: {}", status.value(), e.getCode(), e.getMessage());
+        }
+        return ResponseEntity.status(status)
                 .body(ErrorResponse.of(e.getCode(), e.getMessage()));
     }
 
