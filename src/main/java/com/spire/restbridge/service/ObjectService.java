@@ -393,17 +393,7 @@ public class ObjectService {
             }
             payload.put("properties", properties);
 
-            // Determine the endpoint based on object type
-            String endpoint;
-            if (request.getObjectType().equals("dm_folder") ||
-                request.getObjectType().endsWith("_folder")) {
-                endpoint = "/repositories/{repo}/folders/{folderId}/folders";
-            } else if (request.getObjectType().equals("dm_cabinet") ||
-                       request.getObjectType().endsWith("_cabinet")) {
-                endpoint = "/repositories/{repo}/cabinets";
-            } else {
-                endpoint = "/repositories/{repo}/folders/{folderId}/documents";
-            }
+            String endpoint = createEndpoint(sessionId, request.getObjectType());
 
             @SuppressWarnings("unchecked")
             Map<String, Object> response;
@@ -488,35 +478,73 @@ public class ObjectService {
         }
 
         try {
-            Map<String, Object> response = session.getWebClient().get()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/repositories/{repo}/folders")
-                            .queryParam("folder-path", folderPath)
-                            .build(session.getRepository()))
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
-
-            if (response != null) {
-                List<Map<String, Object>> entries =
-                        (List<Map<String, Object>>) response.get("entries");
-                if (entries != null && !entries.isEmpty()) {
-                    Map<String, Object> firstEntry = entries.get(0);
-                    String id = (String) firstEntry.get("id");
-                    if (id != null && id.contains("/")) {
-                        return id.substring(id.lastIndexOf('/') + 1);
-                    }
+            String folderId = null;
+            for (String segment : folderPath.split("/")) {
+                if (segment.isEmpty()) {
+                    continue;
+                }
+                folderId = findFolderId(session, folderId, segment);
+                if (folderId == null) {
+                    break;
                 }
             }
 
-            throw new ObjectNotFoundException("Folder not found: " + folderPath);
+            if (folderId == null) {
+                throw new ObjectNotFoundException("Folder not found: " + folderPath);
+            }
+            return folderId;
 
+        } catch (WebClientResponseException.NotFound e) {
+            throw new ObjectNotFoundException("Folder not found: " + folderPath);
         } catch (ObjectNotFoundException e) {
             throw e;
         } catch (Exception e) {
             throw new RestBridgeException(ERROR_CODE,
                     "Failed to resolve folder path: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Find a folder by name in the cabinets, or under the parent folder when one is given.
+     * Returns null when no folder has that name.
+     */
+    @SuppressWarnings("unchecked")
+    private String findFolderId(RestSessionHolder session, String parentId, String name) {
+        String filter = "object_name='" + name.replace("'", "''") + "'";
+        Map<String, Object> response = session.getWebClient().get()
+                .uri(uriBuilder -> parentId == null
+                        ? uriBuilder.path("/repositories/{repo}/cabinets")
+                                .queryParam("filter", "{filter}")
+                                .build(session.getRepository(), filter)
+                        : uriBuilder.path("/repositories/{repo}/folders/{folderId}/folders")
+                                .queryParam("filter", "{filter}")
+                                .build(session.getRepository(), parentId, filter))
+                .retrieve()
+                .bodyToMono(Map.class)
+                .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+
+        if (response == null) {
+            return null;
+        }
+        List<Map<String, Object>> entries = (List<Map<String, Object>>) response.get("entries");
+        if (entries == null || entries.isEmpty()) {
+            return null;
+        }
+        return extractEntryInfo(entries.get(0)).getObjectId();
+    }
+
+    private String createEndpoint(String sessionId, String objectType) {
+        String type = objectType;
+        while (type != null && !type.isEmpty()) {
+            if (type.equals("dm_cabinet")) {
+                return "/repositories/{repo}/cabinets";
+            }
+            if (type.equals("dm_folder")) {
+                return "/repositories/{repo}/folders/{folderId}/folders";
+            }
+            type = typeService.getTypeInfo(sessionId, type).getSuperType();
+        }
+        return "/repositories/{repo}/folders/{folderId}/documents";
     }
 
     /**
