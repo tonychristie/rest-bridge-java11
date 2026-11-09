@@ -109,6 +109,17 @@ class DqlControllerTest {
     }
 
     @Test
+    void executeQuery_nullMaxRows_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/dql")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sessionId\":\"" + SESSION_ID + "\",\"query\":\"" + QUERY + "\",\"maxRows\":null}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verifyNoInteractions(dqlService);
+    }
+
+    @Test
     void executeQuery_negativeStartRow_returns400() throws Exception {
         mockMvc.perform(post("/api/v1/dql")
                         .contentType(MediaType.APPLICATION_JSON)
