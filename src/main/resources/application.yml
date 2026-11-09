@@ -8,6 +8,11 @@ spring:
     name: rest-bridge
   main:
     banner-mode: off
+  web:
+    resources:
+      add-mappings: false
+  mvc:
+    throw-exception-if-no-handler-found: true
 
 # REST Bridge configuration
 rest-bridge:

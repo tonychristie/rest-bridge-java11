@@ -120,6 +120,38 @@ class DqlControllerTest {
     }
 
     @Test
+    void executeQuery_malformedJson_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/dql")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{bad"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verifyNoInteractions(dqlService);
+    }
+
+    @Test
+    void executeQuery_noBody_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/dql")
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verifyNoInteractions(dqlService);
+    }
+
+    @Test
+    void executeQuery_textPlainBody_returns415() throws Exception {
+        mockMvc.perform(post("/api/v1/dql")
+                        .contentType(MediaType.TEXT_PLAIN)
+                        .content(QUERY))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_MEDIA_TYPE"));
+
+        verifyNoInteractions(dqlService);
+    }
+
+    @Test
     void executeQuery_dqlNotAvailable_returns503() throws Exception {
         when(dqlService.executeQuery(any(DqlRequest.class))).thenThrow(new DqlNotAvailableException());
 

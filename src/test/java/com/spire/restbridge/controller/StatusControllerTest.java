@@ -38,4 +38,11 @@ class StatusControllerTest {
                 .andExpect(jsonPath("$.version").value("2.3.4"))
                 .andExpect(jsonPath("$.description").isString());
     }
+
+    @Test
+    void unknownPath_returns404() throws Exception {
+        mockMvc.perform(get("/api/v1/nothing"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"));
+    }
 }

@@ -116,6 +116,15 @@ class ObjectControllerTest {
     }
 
     @Test
+    void getCabinets_missingSessionId_returns400() throws Exception {
+        mockMvc.perform(get("/api/v1/cabinets"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verifyNoInteractions(objectService);
+    }
+
+    @Test
     void listFolderContentsById_returnsContentsList() throws Exception {
         List<ObjectInfo> contents = Arrays.asList(
                 ObjectInfo.builder().objectId("0b01234567890001").name("subfolder1").type("dm_folder").build(),
@@ -267,6 +276,13 @@ class ObjectControllerTest {
     }
 
     @Test
+    void patchObject_returns405() throws Exception {
+        mockMvc.perform(patch("/api/v1/objects/" + OBJECT_ID).param("sessionId", SESSION_ID))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.code").value("METHOD_NOT_ALLOWED"));
+    }
+
+    @Test
     void checkout_returnsObject() throws Exception {
         when(objectService.checkout(SESSION_ID, OBJECT_ID))
                 .thenReturn(ObjectInfo.builder().objectId(OBJECT_ID).name("test.txt").build());
@@ -392,5 +408,16 @@ class ObjectControllerTest {
                 .andExpect(content().string(""));
 
         verify(objectService).deleteObject(SESSION_ID, OBJECT_ID, true);
+    }
+
+    @Test
+    void deleteObject_invalidAllVersions_returns400() throws Exception {
+        mockMvc.perform(delete("/api/v1/objects/" + OBJECT_ID)
+                        .param("sessionId", SESSION_ID)
+                        .param("allVersions", "maybe"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verifyNoInteractions(objectService);
     }
 }
