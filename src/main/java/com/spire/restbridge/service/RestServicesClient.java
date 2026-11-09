@@ -51,15 +51,15 @@ public class RestServicesClient {
     }
 
     /**
-     * Reads every page of a collection and returns the entries of all pages.
+     * Reads every page of a collection from {@code firstPage} on and returns the entries of those pages.
      * Query parameter values may name URI variables, so that the variable value is fully encoded.
      */
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> getAllPages(RestSessionHolder session, String path,
                                                  Map<String, String> queryParams,
-                                                 Map<String, ?> uriVariables) {
+                                                 Map<String, ?> uriVariables, int firstPage) {
         List<Map<String, Object>> results = new ArrayList<>();
-        int page = 1;
+        int page = firstPage;
         boolean hasMore = true;
 
         while (hasMore) {

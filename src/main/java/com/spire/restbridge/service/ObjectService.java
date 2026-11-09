@@ -88,7 +88,7 @@ public class ObjectService {
 
         return client.call("Failed to get cabinets", null, () -> extractEntries(
                 client.getAllPages(session, "/repositories/{repo}/cabinets", Collections.emptyMap(),
-                        Map.of("repo", session.getRepository()))));
+                        Map.of("repo", session.getRepository()), 1)));
     }
 
     /**
@@ -102,7 +102,7 @@ public class ObjectService {
         return client.call("Failed to list folder", "Folder not found: " + folderId, () -> extractEntries(
                 client.getAllPages(session, "/repositories/{repo}/folders/{folderId}/objects",
                         Collections.emptyMap(),
-                        Map.of("repo", session.getRepository(), "folderId", folderId))));
+                        Map.of("repo", session.getRepository(), "folderId", folderId), 1)));
     }
 
     /**
