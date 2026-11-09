@@ -4,10 +4,12 @@ import com.spire.restbridge.dto.ErrorResponse;
 import javax.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -35,8 +37,7 @@ public class GlobalExceptionHandler {
         } else {
             log.warn("{} {}: {}", status.value(), e.getCode(), e.getMessage());
         }
-        return ResponseEntity.status(status)
-                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
+        return jsonError(status, e.getCode(), e.getMessage());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -45,8 +46,7 @@ public class GlobalExceptionHandler {
                 .map(fe -> fe.getField() + ": " + fe.getDefaultMessage())
                 .collect(Collectors.joining(", "));
         log.warn("Validation error: {}", message);
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ErrorResponse.of("VALIDATION_ERROR", message));
+        return jsonError(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", message);
     }
 
     @ExceptionHandler(MissingServletRequestParameterException.class)
@@ -85,6 +85,13 @@ public class GlobalExceptionHandler {
                 "Content type " + type + " is not supported");
     }
 
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<ErrorResponse> handleMediaTypeNotAcceptable(HttpMediaTypeNotAcceptableException e,
+                                                                      HttpServletRequest request) {
+        return requestError(HttpStatus.NOT_ACCEPTABLE, "NOT_ACCEPTABLE",
+                "Accept " + request.getHeader(HttpHeaders.ACCEPT) + " is not supported, use application/json");
+    }
+
     @ExceptionHandler(NoHandlerFoundException.class)
     public ResponseEntity<ErrorResponse> handleNoHandlerFound(NoHandlerFoundException e) {
         return requestError(HttpStatus.NOT_FOUND, "NOT_FOUND",
@@ -94,12 +101,19 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleException(Exception e) {
         log.error("Unexpected error: {}", e.getMessage(), e);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ErrorResponse.of("INTERNAL_ERROR", "An unexpected error occurred: " + e.getMessage()));
+        return jsonError(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR",
+                "An unexpected error occurred: " + e.getMessage());
     }
 
     private ResponseEntity<ErrorResponse> requestError(HttpStatus status, String code, String message) {
         log.warn("{} {}: {}", status.value(), code, message);
-        return ResponseEntity.status(status).body(ErrorResponse.of(code, message));
+        return jsonError(status, code, message);
+    }
+
+    // A preset content type stops Spring matching the body against the Accept header.
+    private ResponseEntity<ErrorResponse> jsonError(HttpStatus status, String code, String message) {
+        return ResponseEntity.status(status)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(ErrorResponse.of(code, message));
     }
 }
