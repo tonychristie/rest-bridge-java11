@@ -35,7 +35,7 @@ class RestServicesClientTest {
             server.start();
 
             List<Map<String, Object>> entries = client.getAllPages(session(server, 30),
-                    "/repositories/{repo}/cabinets", Collections.emptyMap(), Map.of("repo", "testrepo"));
+                    "/repositories/{repo}/cabinets", Collections.emptyMap(), Map.of("repo", "testrepo"), 1);
 
             assertEquals(List.of("a", "b", "c"),
                     entries.stream().map(entry -> entry.get("id")).collect(Collectors.toList()));
@@ -50,6 +50,23 @@ class RestServicesClientTest {
     }
 
     @Test
+    void getAllPages_firstPage2_requestsPage2First() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{\"entries\": [{\"id\": \"b\"}], " + NEXT_LINK + "}"));
+            server.enqueue(jsonResponse("{\"entries\": [{\"id\": \"c\"}]}"));
+            server.start();
+
+            List<Map<String, Object>> entries = client.getAllPages(session(server, 30),
+                    "/repositories/{repo}/cabinets", Collections.emptyMap(), Map.of("repo", "testrepo"), 2);
+
+            assertEquals(List.of("b", "c"),
+                    entries.stream().map(entry -> entry.get("id")).collect(Collectors.toList()));
+            assertEquals("2", server.takeRequest().getRequestUrl().queryParameter("page"));
+            assertEquals("3", server.takeRequest().getRequestUrl().queryParameter("page"));
+        }
+    }
+
+    @Test
     void getAllPages_filterUriVariable_isSentFullyEncoded() throws Exception {
         try (MockWebServer server = new MockWebServer()) {
             server.enqueue(jsonResponse("{\"entries\": []}"));
@@ -57,7 +74,7 @@ class RestServicesClientTest {
 
             client.getAllPages(session(server, 30), "/repositories/{repo}/users",
                     Map.of("filter", "{filter}"),
-                    Map.of("repo", "testrepo", "filter", "starts-with(name,'o''b') and x='a,b'"));
+                    Map.of("repo", "testrepo", "filter", "starts-with(name,'o''b') and x='a,b'"), 1);
 
             assertEquals("/repositories/testrepo/users"
                             + "?filter=starts-with%28name%2C%27o%27%27b%27%29%20and%20x%3D%27a%2Cb%27"

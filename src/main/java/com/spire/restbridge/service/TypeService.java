@@ -135,7 +135,7 @@ public class TypeService {
             List<TypeInfo> results = new ArrayList<>();
 
             for (Map<String, Object> entry : client.getAllPages(session, "/repositories/{repo}/types",
-                    queryParams, uriVariables)) {
+                    queryParams, uriVariables, 1)) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> content = (Map<String, Object>) entry.get("content");
                 if (content != null) {
