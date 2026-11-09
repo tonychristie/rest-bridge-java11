@@ -125,6 +125,49 @@ class ObjectControllerTest {
     }
 
     @Test
+    void getObject_nonExistingObject_acceptXml_returns404Json() throws Exception {
+        when(objectService.getObject(SESSION_ID, "nonexistent"))
+                .thenThrow(new ObjectNotFoundException("Object not found: nonexistent"));
+
+        mockMvc.perform(get("/api/v1/objects/nonexistent").param("sessionId", SESSION_ID)
+                        .accept(MediaType.APPLICATION_XML))
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("OBJECT_NOT_FOUND"));
+    }
+
+    @Test
+    void getObject_unexpectedException_acceptXml_returns500Json() throws Exception {
+        when(objectService.getObject(SESSION_ID, OBJECT_ID)).thenThrow(new IllegalStateException("boom"));
+
+        mockMvc.perform(get("/api/v1/objects/" + OBJECT_ID).param("sessionId", SESSION_ID)
+                        .accept(MediaType.APPLICATION_XML))
+                .andExpect(status().isInternalServerError())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
+    }
+
+    @Test
+    void getCabinets_missingSessionId_acceptXml_returns400Json() throws Exception {
+        mockMvc.perform(get("/api/v1/cabinets").accept(MediaType.APPLICATION_XML))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+    }
+
+    @Test
+    void getCabinets_acceptXml_returns406Json() throws Exception {
+        when(objectService.getCabinets(SESSION_ID)).thenReturn(Collections.singletonList(
+                ObjectInfo.builder().objectId("0c01234567890001").name("System").type("dm_cabinet").build()));
+
+        mockMvc.perform(get("/api/v1/cabinets").param("sessionId", SESSION_ID)
+                        .accept(MediaType.APPLICATION_XML))
+                .andExpect(status().isNotAcceptable())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("NOT_ACCEPTABLE"));
+    }
+
+    @Test
     void listFolderContentsById_returnsContentsList() throws Exception {
         List<ObjectInfo> contents = Arrays.asList(
                 ObjectInfo.builder().objectId("0b01234567890001").name("subfolder1").type("dm_folder").build(),

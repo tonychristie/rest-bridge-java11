@@ -98,6 +98,20 @@ class SessionControllerTest {
     }
 
     @Test
+    void connect_missingField_acceptXml_returns400Json() throws Exception {
+        Map<String, String> body = connectBody();
+        body.remove("password");
+
+        mockMvc.perform(post("/api/v1/connect")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.APPLICATION_XML)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+    }
+
+    @Test
     void connect_badCredentials_returns401() throws Exception {
         when(sessionService.connect(any(ConnectRequest.class)))
                 .thenThrow(new ConnectionException("Authentication failed", HttpStatus.UNAUTHORIZED));
