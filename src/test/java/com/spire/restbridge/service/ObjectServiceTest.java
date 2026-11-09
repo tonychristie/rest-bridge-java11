@@ -95,7 +95,10 @@ class ObjectServiceTest {
             assertEquals("/repositories/testrepo/folders/0b04719980003df0/objects",
                     first.getRequestUrl().encodedPath());
             assertNull(first.getRequestUrl().queryParameter("inline"));
-            assertEquals("2", server.takeRequest().getRequestUrl().queryParameter("page"));
+            assertEquals("object_name,r_object_id", first.getRequestUrl().queryParameter("sort"));
+            RecordedRequest second = server.takeRequest();
+            assertEquals("2", second.getRequestUrl().queryParameter("page"));
+            assertEquals("object_name,r_object_id", second.getRequestUrl().queryParameter("sort"));
         }
     }
 

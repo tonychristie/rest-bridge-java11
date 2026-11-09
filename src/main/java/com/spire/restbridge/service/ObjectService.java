@@ -101,7 +101,7 @@ public class ObjectService {
 
         return client.call("Failed to list folder", "Folder not found: " + folderId, () -> extractEntries(
                 client.getAllPages(session, "/repositories/{repo}/folders/{folderId}/objects",
-                        Collections.emptyMap(),
+                        Map.of("sort", "object_name,r_object_id"),
                         Map.of("repo", session.getRepository(), "folderId", folderId), 1)));
     }
 
