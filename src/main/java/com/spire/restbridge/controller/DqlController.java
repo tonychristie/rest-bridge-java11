@@ -1,5 +1,6 @@
 package com.spire.restbridge.controller;
 
+import com.spire.restbridge.config.ErrorResponses;
 import com.spire.restbridge.dto.DqlRequest;
 import com.spire.restbridge.dto.ErrorResponse;
 import com.spire.restbridge.model.QueryResult;
@@ -28,6 +29,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1")
 @Tag(name = "DQL", description = "DQL query execution (may not be available on all servers)")
+@ErrorResponses(session = true)
 public class DqlController {
 
     private final DqlService dqlService;
@@ -53,17 +55,12 @@ public class DqlController {
         ),
         @ApiResponse(
             responseCode = "400",
-            description = "Invalid DQL query",
+            description = "Invalid query, or an aggregate query, which REST Services does not support",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))
         ),
         @ApiResponse(
             responseCode = "503",
-            description = "DQL not available on this server",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))
-        ),
-        @ApiResponse(
-            responseCode = "404",
-            description = "Session not found",
+            description = "DQL is not available for this user or server, or REST Services cannot be reached",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))
         )
     })
@@ -82,11 +79,6 @@ public class DqlController {
         @ApiResponse(
             responseCode = "200",
             description = "DQL availability status"
-        ),
-        @ApiResponse(
-            responseCode = "404",
-            description = "Session not found",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))
         )
     })
     public ResponseEntity<Map<String, Object>> isDqlAvailable(

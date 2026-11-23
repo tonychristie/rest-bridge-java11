@@ -1,5 +1,6 @@
 package com.spire.restbridge.controller;
 
+import com.spire.restbridge.config.ErrorResponses;
 import com.spire.restbridge.dto.ErrorResponse;
 import com.spire.restbridge.model.GroupInfo;
 import com.spire.restbridge.model.UserInfo;
@@ -27,6 +28,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1")
 @Tag(name = "Users and Groups", description = "User and group operations using native REST endpoints")
+@ErrorResponses(session = true)
 public class UserGroupController {
 
     private final UserGroupService userGroupService;
@@ -67,7 +69,7 @@ public class UserGroupController {
         ),
         @ApiResponse(
             responseCode = "404",
-            description = "User not found",
+            description = "User or session not found",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))
         )
     })
@@ -148,7 +150,7 @@ public class UserGroupController {
         ),
         @ApiResponse(
             responseCode = "404",
-            description = "Group not found",
+            description = "Group or session not found",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))
         )
     })
