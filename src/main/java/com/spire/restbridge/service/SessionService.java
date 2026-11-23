@@ -21,6 +21,8 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.DefaultUriBuilderFactory;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
@@ -59,6 +61,7 @@ public class SessionService {
 
         // Remove trailing slash
         endpoint = endpoint.replaceAll("/+$", "");
+        validateEndpoint(endpoint);
 
         RestSessionHolder holder = createSessionHolder(endpoint, request.getUsername(),
                 request.getPassword(), properties.getTimeoutSeconds());
@@ -115,6 +118,31 @@ public class SessionService {
             }
             throw new ConnectionException("REST connection failed: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Requires an authority rather than a host: java.net.URI gives a host name with an
+     * underscore a null host, and such a host name is accepted.
+     */
+    private static void validateEndpoint(String endpoint) {
+        URI uri;
+        try {
+            uri = new URI(endpoint);
+        } catch (URISyntaxException e) {
+            throw invalidEndpoint(endpoint);
+        }
+        String scheme = uri.getScheme();
+        if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+            throw invalidEndpoint(endpoint);
+        }
+        if (uri.getRawAuthority() == null) {
+            throw invalidEndpoint(endpoint);
+        }
+    }
+
+    private static ConnectionException invalidEndpoint(String endpoint) {
+        return new ConnectionException("REST endpoint URL must be an absolute http or https URL: " + endpoint,
+                HttpStatus.BAD_REQUEST);
     }
 
     /**

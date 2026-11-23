@@ -2,6 +2,8 @@ package com.spire.restbridge.util;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Locale;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -102,5 +104,17 @@ class PermissionUtilsTest {
         assertEquals(-1, PermissionUtils.labelToPermit("Invalid"));
         assertEquals(-1, PermissionUtils.labelToPermit(null));
         assertEquals(-1, PermissionUtils.labelToPermit(""));
+    }
+
+    @Test
+    void labelToPermit_turkishDefaultLocale_mapsLabelsWithI() {
+        Locale previous = Locale.getDefault();
+        Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+        try {
+            assertEquals(6, PermissionUtils.labelToPermit("Write"));
+            assertEquals(7, PermissionUtils.labelToPermit("Delete"));
+        } finally {
+            Locale.setDefault(previous);
+        }
     }
 }

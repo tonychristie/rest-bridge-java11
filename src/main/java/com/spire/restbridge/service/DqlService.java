@@ -14,6 +14,7 @@ import org.springframework.web.client.RestClientResponseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -133,7 +134,7 @@ public class DqlService {
                 throw new DqlNotAvailableException(e.getResponseBodyAsString());
             }
             if (e.getRawStatusCode() == 400 || e.getRawStatusCode() == 404) {
-                String body = e.getResponseBodyAsString().toLowerCase();
+                String body = e.getResponseBodyAsString().toLowerCase(Locale.ROOT);
                 // Check for QueryResultItemView error (aggregate query indicator)
                 if (body.contains("queryresultitemview") ||
                     (body.contains("failed to instantiate") && body.contains("id=null"))) {
@@ -187,7 +188,7 @@ public class DqlService {
             return body.contains("E_DQL_QUERY_FAILED");
         }
         if (status == 400 || status == 404) {
-            String lowerBody = body.toLowerCase();
+            String lowerBody = body.toLowerCase(Locale.ROOT);
             return lowerBody.contains("dql")
                     && (lowerBody.contains("disabled") || lowerBody.contains("not supported"));
         }
@@ -215,10 +216,10 @@ public class DqlService {
 
         return client.get(session, DOCUMENTUM_MEDIA_TYPE, uriBuilder -> uriBuilder
                 .path("/repositories/{repo}")
-                .queryParam("dql", query)
+                .queryParam("dql", "{dql}")
                 .queryParam("items-per-page", itemsPerPage)
                 .queryParam("page", page)
-                .build(session.getRepository()));
+                .build(Map.of("repo", session.getRepository(), "dql", query)));
     }
 
     @SuppressWarnings("unchecked")
@@ -241,10 +242,10 @@ public class DqlService {
             return columns;
         }
 
-        for (String key : properties.keySet()) {
-            Object value = properties.get(key);
+        for (Map.Entry<String, Object> property : properties.entrySet()) {
+            Object value = property.getValue();
             columns.add(QueryResult.ColumnInfo.builder()
-                    .name(key)
+                    .name(property.getKey())
                     .type(inferType(value))
                     .length(0)
                     .repeating(value instanceof List)
@@ -315,7 +316,7 @@ public class DqlService {
             return false;
         }
 
-        String upperQuery = outerQueryText(query).toUpperCase().trim();
+        String upperQuery = outerQueryText(query).toUpperCase(Locale.ROOT).trim();
 
         // GROUP BY is the clearest indicator of an aggregate query
         if (upperQuery.contains("GROUP BY")) {

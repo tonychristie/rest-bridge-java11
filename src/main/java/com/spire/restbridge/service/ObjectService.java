@@ -23,6 +23,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -284,12 +285,13 @@ public class ObjectService {
                     HttpStatus.BAD_REQUEST);
         }
 
-        // If it looks like an object ID (16 hex chars), use it directly
-        if (folderPath.matches("[0-9a-fA-F]{16}")) {
-            return folderPath;
-        }
-
         try {
+            if (folderPath.matches("[0-9a-fA-F]{16}")) {
+                client.get(session, "/repositories/{repo}/folders/{folderId}?links=false",
+                        session.getRepository(), folderPath);
+                return folderPath;
+            }
+
             String folderId = null;
             for (String segment : folderPath.split("/")) {
                 if (segment.isEmpty()) {
@@ -492,7 +494,7 @@ public class ObjectService {
         }
 
         // Remove dm_ prefix if present
-        String normalized = dctmType.toLowerCase();
+        String normalized = dctmType.toLowerCase(Locale.ROOT);
         if (normalized.startsWith("dm_")) {
             normalized = normalized.substring(3);
         }
@@ -605,7 +607,7 @@ public class ObjectService {
         if (basicPermission != null) {
             objectInfo.setPermissionLevel(basicPermission);
             objectInfo.setPermissionLabel(permissionLabel != null ?
-                    permissionLabel.toUpperCase() : PermissionUtils.permitToLabel(basicPermission));
+                    permissionLabel.toUpperCase(Locale.ROOT) : PermissionUtils.permitToLabel(basicPermission));
         }
 
         objectInfo.setExtendedPermissions(extendedPermissions.isEmpty() ?
