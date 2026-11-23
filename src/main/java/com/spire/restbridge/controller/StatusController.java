@@ -1,5 +1,6 @@
 package com.spire.restbridge.controller;
 
+import com.spire.restbridge.config.ErrorResponses;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.boot.info.BuildProperties;
@@ -14,6 +15,7 @@ import java.util.Map;
  */
 @RestController
 @Tag(name = "Status", description = "Health and status endpoints")
+@ErrorResponses
 public class StatusController {
 
     private final BuildProperties buildProperties;

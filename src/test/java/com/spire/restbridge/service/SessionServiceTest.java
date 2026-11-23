@@ -9,6 +9,8 @@ import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpStatus;
 
 import java.time.Instant;
@@ -86,6 +88,43 @@ class SessionServiceTest {
         assertEquals("CONNECTION_ERROR", ex.getCode());
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
         assertEquals("Cannot connect to REST endpoint: http://127.0.0.1:1/dctm-rest", ex.getMessage());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "http://exa mple.com/dctm-rest",
+        "192.168.0.110:9080/dctm-rest",
+        "localhost:9080/dctm-rest",
+        "http:///dctm-rest",
+        "ftp://host/dctm-rest"
+    })
+    void connect_malformedEndpoint_throwsConnectionErrorWithBadRequestAndSendsNoRequest(String endpoint)
+            throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            ConnectRequest request = connectRequest(server);
+            request.setEndpoint(endpoint);
+
+            ConnectionException ex = assertThrows(ConnectionException.class, () -> sessionService.connect(request));
+            assertEquals("CONNECTION_ERROR", ex.getCode());
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertEquals(0, server.getRequestCount());
+        }
+    }
+
+    @Test
+    void connect_upperCaseScheme_connects() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(repositoryResponse());
+            server.start();
+            ConnectRequest request = connectRequest(server);
+            request.setEndpoint(request.getEndpoint().replaceFirst("^http:", "HTTP:"));
+
+            ConnectResponse response = sessionService.connect(request);
+
+            assertTrue(response.getSessionId().startsWith("rest-"));
+            assertEquals(1, server.getRequestCount());
+        }
     }
 
     @Test

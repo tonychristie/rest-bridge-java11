@@ -18,8 +18,8 @@ public class RestSessionHolder {
     private DefaultUriBuilderFactory uriBuilderFactory;
     private String repository;
     private SessionInfo sessionInfo;
-    private boolean dqlAvailable;
-    private Boolean dqlChecked;
+    private volatile boolean dqlAvailable;
+    private volatile Boolean dqlChecked;
 
     /** Attribute metadata by type name, for this session only. */
     private final Map<String, Map<String, AttrMeta>> attributeMetadata = new ConcurrentHashMap<>();

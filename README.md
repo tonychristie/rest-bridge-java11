@@ -346,6 +346,14 @@ rest-bridge-java11/
 mvn test
 ```
 
+To run the tests, SpotBugs and the coverage report together:
+
+```bash
+mvn verify
+```
+
+`mvn verify` fails the build on any SpotBugs item that `spotbugs-exclude.xml` does not cover, and writes the coverage report to `target/site/jacoco/index.html`.
+
 ### DQL Graceful Degradation
 
 The DQL service automatically detects if DQL is disabled on the REST Services endpoint:

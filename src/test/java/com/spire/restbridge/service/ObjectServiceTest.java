@@ -21,6 +21,7 @@ import org.mockito.MockitoAnnotations;
 import org.springframework.http.HttpStatus;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -184,6 +185,27 @@ class ObjectServiceTest {
             assertEquals(6, object.getPermissionLevel());
             assertEquals("WRITE", object.getPermissionLabel());
             assertEquals(List.of("EXECUTE_PROC", "CHANGE_LOCATION"), object.getExtendedPermissions());
+        }
+    }
+
+    @Test
+    void getObject_turkishDefaultLocale_readsWritePermission() throws Exception {
+        Locale previous = Locale.getDefault();
+        Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(batchResponse(
+                    operation("getObject", 200, objectEntity("0901234567890001")),
+                    operation("getPermissions", 200, Map.of("basic-permission", "Write"))));
+            server.start();
+            mockSession(server);
+            when(typeService.getTypeInfo("session-1", "my_doc")).thenReturn(keywordsType(true));
+
+            ObjectInfo object = objectService.getObject("session-1", "0901234567890001");
+
+            assertEquals(6, object.getPermissionLevel());
+            assertEquals("WRITE", object.getPermissionLabel());
+        } finally {
+            Locale.setDefault(previous);
         }
     }
 
@@ -638,8 +660,9 @@ class ObjectServiceTest {
     }
 
     @Test
-    void createObject_withFolderId_postsToFolderWithoutLookup() throws Exception {
+    void createObject_withFolderIdFound_looksUpFolderAndPostsToIt() throws Exception {
         try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(folderResponse("0b01234567890002"));
             enqueueCreated(server, "dm_document");
             server.start();
             mockSession(server);
@@ -647,9 +670,47 @@ class ObjectServiceTest {
 
             objectService.createObject("session-1", createRequest("dm_document", "0b01234567890002"));
 
+            RecordedRequest lookup = server.takeRequest();
+            assertEquals("GET", lookup.getMethod());
+            assertEquals("/repositories/testrepo/folders/0b01234567890002?links=false", lookup.getPath());
             RecordedRequest create = server.takeRequest();
             assertEquals("POST", create.getMethod());
             assertEquals("/repositories/testrepo/folders/0b01234567890002/documents", create.getPath());
+        }
+    }
+
+    @Test
+    void createObject_withFolderIdNotFound_throwsObjectNotFoundAndSendsNoCreate() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{\"status\": 404, \"code\": \"E_RESOURCE_NOT_FOUND\"}")
+                    .setResponseCode(404));
+            server.start();
+            mockSession(server);
+            mockTypeChain("dm_document", "dm_sysobject");
+
+            ObjectNotFoundException ex = assertThrows(ObjectNotFoundException.class, () -> objectService
+                    .createObject("session-1", createRequest("dm_document", "0b01234567899999")));
+            assertEquals("OBJECT_NOT_FOUND", ex.getCode());
+            assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
+            assertEquals("Folder not found: 0b01234567899999", ex.getMessage());
+            assertEquals(1, server.getRequestCount());
+        }
+    }
+
+    @Test
+    void createObject_withFolderIdLookupBadRequest_throwsRestErrorWithBadRequest() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{\"status\": 400, \"code\": \"E_OPERATION_NOT_SUPPORTED_ON_TYPE\"}")
+                    .setResponseCode(400));
+            server.start();
+            mockSession(server);
+            mockTypeChain("dm_document", "dm_sysobject");
+
+            RestBridgeException ex = assertThrows(RestBridgeException.class, () -> objectService
+                    .createObject("session-1", createRequest("dm_document", "0901234567890001")));
+            assertEquals("REST_ERROR", ex.getCode());
+            assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+            assertEquals(1, server.getRequestCount());
         }
     }
 
@@ -686,6 +747,7 @@ class ObjectServiceTest {
     @Test
     void createObject_folderSubtype_postsToFolders() throws Exception {
         try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(folderResponse("0b01234567890002"));
             enqueueCreated(server, "dm_category");
             server.start();
             mockSession(server);
@@ -693,6 +755,7 @@ class ObjectServiceTest {
 
             objectService.createObject("session-1", createRequest("dm_category", "0b01234567890002"));
 
+            server.takeRequest();
             assertEquals("/repositories/testrepo/folders/0b01234567890002/folders",
                     server.takeRequest().getPath());
         }
@@ -722,6 +785,11 @@ class ObjectServiceTest {
     private static MockResponse folderEntries(String folderId) {
         return jsonResponse("{\"entries\": [{\"id\": \"http://host/repositories/testrepo/objects/"
                 + folderId + "\"}]}");
+    }
+
+    private static MockResponse folderResponse(String folderId) {
+        return jsonResponse("{\"properties\": {\"r_object_id\": \"" + folderId + "\", "
+                + "\"r_object_type\": \"dm_folder\"}}");
     }
 
     private static void enqueueCreated(MockWebServer server, String type) {

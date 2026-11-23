@@ -1,5 +1,7 @@
 package com.spire.restbridge.util;
 
+import java.util.Locale;
+
 /**
  * Utility class for permission conversions.
  */
@@ -47,7 +49,7 @@ public final class PermissionUtils {
         if (label == null || label.isEmpty()) {
             return -1;
         }
-        switch (label.toUpperCase()) {
+        switch (label.toUpperCase(Locale.ROOT)) {
             case "NONE":
                 return 1;
             case "BROWSE":
