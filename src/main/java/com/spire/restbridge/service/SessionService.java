@@ -10,16 +10,20 @@ import com.spire.restbridge.model.SessionInfo;
 import javax.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.ExchangeStrategies;
-import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.util.DefaultUriBuilderFactory;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
@@ -52,42 +56,24 @@ public class SessionService {
 
         String endpoint = request.getEndpoint();
         if (endpoint == null || endpoint.isBlank()) {
-            throw new ConnectionException("REST endpoint URL is required");
+            throw new ConnectionException("REST endpoint URL is required", HttpStatus.BAD_REQUEST);
         }
 
         // Remove trailing slash
         endpoint = endpoint.replaceAll("/+$", "");
+        validateEndpoint(endpoint);
 
-        // Create Basic Auth header
-        String credentials = request.getUsername() + ":" + request.getPassword();
-        String encodedCredentials = Base64.getEncoder()
-                .encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
-
-        // Create WebClient for this session
-        ExchangeStrategies strategies = ExchangeStrategies.builder()
-                .codecs(configurer -> configurer.defaultCodecs()
-                        .maxInMemorySize(16 * 1024 * 1024)) // 16MB buffer
-                .build();
-
-        WebClient webClient = WebClient.builder()
-                .baseUrl(endpoint)
-                .exchangeStrategies(strategies)
-                .defaultHeader(HttpHeaders.AUTHORIZATION, "Basic " + encodedCredentials)
-                .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
-                .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                .build();
+        RestSessionHolder holder = createSessionHolder(endpoint, request.getUsername(),
+                request.getPassword(), properties.getTimeoutSeconds());
 
         // Validate connection by fetching repository info
         try {
             @SuppressWarnings("unchecked")
-            Map<String, Object> repoResponse = webClient.get()
-                    .uri("/repositories/{repo}", request.getRepository())
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block(Duration.ofSeconds(properties.getTimeoutSeconds()));
+            Map<String, Object> repoResponse = holder.getRestTemplate()
+                    .getForObject("/repositories/{repo}", Map.class, request.getRepository());
 
             if (repoResponse == null) {
-                throw new ConnectionException("No response from REST endpoint");
+                throw new ConnectionException("No response from REST endpoint", HttpStatus.BAD_GATEWAY);
             }
 
             // Generate session ID
@@ -96,17 +82,10 @@ public class SessionService {
             // Build repository info from response
             RepositoryInfo repoInfo = extractRepositoryInfo(repoResponse, request, endpoint);
 
-            // Create session holder
-            RestSessionHolder holder = new RestSessionHolder();
-            holder.setWebClient(webClient);
             holder.setRepository(request.getRepository());
-            holder.setUsername(request.getUsername());
-            holder.setPassword(request.getPassword());
-            holder.setEndpoint(endpoint);
             holder.setDqlChecked(null); // Will check on first DQL request
             holder.setSessionInfo(SessionInfo.builder()
                     .sessionId(sessionId)
-                    .connected(true)
                     .repository(request.getRepository())
                     .user(request.getUsername())
                     .endpoint(endpoint)
@@ -125,20 +104,73 @@ public class SessionService {
                     .repositoryInfo(repoInfo)
                     .build();
 
-        } catch (WebClientResponseException.Unauthorized e) {
-            throw new ConnectionException("Authentication failed. Check your credentials.");
-        } catch (WebClientResponseException.NotFound e) {
-            throw new ConnectionException("Repository \"" + request.getRepository() + "\" not found.");
-        } catch (WebClientResponseException e) {
-            throw new ConnectionException("REST connection failed: " + e.getStatusCode() + " - " + e.getResponseBodyAsString());
+        } catch (HttpClientErrorException.Unauthorized e) {
+            throw new ConnectionException("Authentication failed. Check your credentials.", e);
+        } catch (HttpClientErrorException.NotFound e) {
+            throw new ConnectionException("Repository \"" + request.getRepository() + "\" not found.", e);
+        } catch (RestClientResponseException e) {
+            throw new ConnectionException("REST connection failed: " + e.getRawStatusCode() + " - " + e.getResponseBodyAsString(), e);
         } catch (ConnectionException e) {
             throw e;
         } catch (Exception e) {
             if (e.getCause() instanceof java.net.ConnectException) {
-                throw new ConnectionException("Cannot connect to REST endpoint: " + endpoint);
+                throw new ConnectionException("Cannot connect to REST endpoint: " + endpoint, e);
             }
             throw new ConnectionException("REST connection failed: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Requires an authority rather than a host: java.net.URI gives a host name with an
+     * underscore a null host, and such a host name is accepted.
+     */
+    private static void validateEndpoint(String endpoint) {
+        URI uri;
+        try {
+            uri = new URI(endpoint);
+        } catch (URISyntaxException e) {
+            throw invalidEndpoint(endpoint);
+        }
+        String scheme = uri.getScheme();
+        if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+            throw invalidEndpoint(endpoint);
+        }
+        if (uri.getRawAuthority() == null) {
+            throw invalidEndpoint(endpoint);
+        }
+    }
+
+    private static ConnectionException invalidEndpoint(String endpoint) {
+        return new ConnectionException("REST endpoint URL must be an absolute http or https URL: " + endpoint,
+                HttpStatus.BAD_REQUEST);
+    }
+
+    /**
+     * Builds a session holder whose RestTemplate sends Basic authentication to the endpoint,
+     * with the timeout as both its connect timeout and its read timeout.
+     */
+    public static RestSessionHolder createSessionHolder(String endpoint, String username, String password,
+                                                        int timeoutSeconds) {
+        String credentials = username + ":" + password;
+        String encodedCredentials = Base64.getEncoder()
+                .encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
+
+        DefaultUriBuilderFactory uriBuilderFactory = new DefaultUriBuilderFactory(endpoint);
+
+        RestSessionHolder holder = new RestSessionHolder();
+        holder.setUriBuilderFactory(uriBuilderFactory);
+        holder.setRestTemplate(new RestTemplateBuilder()
+                .requestFactory(() -> {
+                    SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+                    requestFactory.setConnectTimeout(timeoutSeconds * 1000);
+                    requestFactory.setReadTimeout(timeoutSeconds * 1000);
+                    return requestFactory;
+                })
+                .uriTemplateHandler(uriBuilderFactory)
+                .defaultHeader(HttpHeaders.AUTHORIZATION, "Basic " + encodedCredentials)
+                .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .build());
+        return holder;
     }
 
     /**

@@ -8,23 +8,24 @@ import com.spire.restbridge.model.AttributeValue;
 import com.spire.restbridge.model.ObjectInfo;
 import com.spire.restbridge.model.TypeInfo;
 import com.spire.restbridge.util.PermissionUtils;
+import com.spire.restbridge.util.PropertyUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.client.HttpClientErrorException;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Service for object operations via Documentum REST Services.
@@ -41,29 +42,18 @@ public class ObjectService {
 
     private static final Logger log = LoggerFactory.getLogger(ObjectService.class);
     private static final String ERROR_CODE = "REST_ERROR";
-    private static final int TIMEOUT_SECONDS = 30;
+    private static final String PERMISSIONS_OPERATION = "getPermissions";
 
     private final SessionService sessionService;
     private final TypeService typeService;
+    private final RestServicesClient client;
     private final ObjectMapper objectMapper;
 
-    /** Cache of attribute metadata (type and repeating) by type name. */
-    private final Map<String, Map<String, AttrMeta>> attributeMetaCache = new ConcurrentHashMap<>();
-
-    /** Internal class to hold attribute metadata. */
-    private static class AttrMeta {
-        final String type;
-        final boolean repeating;
-
-        AttrMeta(String type, boolean repeating) {
-            this.type = type;
-            this.repeating = repeating;
-        }
-    }
-
-    public ObjectService(SessionService sessionService, TypeService typeService, ObjectMapper objectMapper) {
+    public ObjectService(SessionService sessionService, TypeService typeService, RestServicesClient client,
+                         ObjectMapper objectMapper) {
         this.sessionService = sessionService;
         this.typeService = typeService;
+        this.client = client;
         this.objectMapper = objectMapper;
     }
 
@@ -75,35 +65,18 @@ public class ObjectService {
 
         RestSessionHolder session = sessionService.getSession(sessionId);
 
-        try {
-            Map<String, Object> batchRequest = buildObjectPermissionsBatchRequest(
-                    session.getRepository(), objectId);
+        return client.call("Failed to get object", "Object not found: " + objectId, () -> {
+            Map<String, RestServicesClient.BatchResult> results = client.batch(session, false, List.of(
+                    new RestServicesClient.BatchOperation("getObject", "GET",
+                            objectUri(session, objectId), null),
+                    permissionsOperation(session, objectId)));
 
-            @SuppressWarnings("unchecked")
-            Map<String, Object> batchResponse = session.getWebClient().post()
-                    .uri("/repositories/{repo}/batches", session.getRepository())
-                    .bodyValue(batchRequest)
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
-
-            if (batchResponse == null) {
-                throw new ObjectNotFoundException(objectId);
+            if (results == null) {
+                throw new ObjectNotFoundException("Object not found: " + objectId);
             }
 
-            return extractFromBatchResponse(batchResponse, objectId, sessionId);
-
-        } catch (WebClientResponseException.NotFound e) {
-            throw new ObjectNotFoundException(objectId);
-        } catch (WebClientResponseException e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to get object: " + e.getResponseBodyAsString(), e);
-        } catch (ObjectNotFoundException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to get object: " + e.getMessage(), e);
-        }
+            return extractFromBatchResults(results, "getObject", objectId, session);
+        });
     }
 
     /**
@@ -114,37 +87,9 @@ public class ObjectService {
 
         RestSessionHolder session = sessionService.getSession(sessionId);
 
-        try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> response = session.getWebClient().get()
-                    .uri("/repositories/{repo}/cabinets", session.getRepository())
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
-
-            List<ObjectInfo> results = new ArrayList<>();
-
-            if (response != null) {
-                @SuppressWarnings("unchecked")
-                List<Map<String, Object>> entries =
-                        (List<Map<String, Object>>) response.get("entries");
-
-                if (entries != null) {
-                    for (Map<String, Object> entry : entries) {
-                        results.add(extractEntryInfo(entry));
-                    }
-                }
-            }
-
-            return results;
-
-        } catch (WebClientResponseException e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to get cabinets: " + e.getResponseBodyAsString(), e);
-        } catch (Exception e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to get cabinets: " + e.getMessage(), e);
-        }
+        return client.call("Failed to get cabinets", null, () -> extractEntries(
+                client.getAllPages(session, "/repositories/{repo}/cabinets", Collections.emptyMap(),
+                        Map.of("repo", session.getRepository()), 1)));
     }
 
     /**
@@ -155,40 +100,10 @@ public class ObjectService {
 
         RestSessionHolder session = sessionService.getSession(sessionId);
 
-        try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> response = session.getWebClient().get()
-                    .uri("/repositories/{repo}/folders/{folderId}/objects",
-                            session.getRepository(), folderId)
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
-
-            List<ObjectInfo> results = new ArrayList<>();
-
-            if (response != null) {
-                @SuppressWarnings("unchecked")
-                List<Map<String, Object>> entries =
-                        (List<Map<String, Object>>) response.get("entries");
-
-                if (entries != null) {
-                    for (Map<String, Object> entry : entries) {
-                        results.add(extractEntryInfo(entry));
-                    }
-                }
-            }
-
-            return results;
-
-        } catch (WebClientResponseException.NotFound e) {
-            throw new ObjectNotFoundException("Folder not found: " + folderId);
-        } catch (WebClientResponseException e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to list folder: " + e.getResponseBodyAsString(), e);
-        } catch (Exception e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to list folder: " + e.getMessage(), e);
-        }
+        return client.call("Failed to list folder", "Folder not found: " + folderId, () -> extractEntries(
+                client.getAllPages(session, "/repositories/{repo}/folders/{folderId}/objects",
+                        Map.of("sort", "object_name,r_object_id"),
+                        Map.of("repo", session.getRepository(), "folderId", folderId), 1)));
     }
 
     /**
@@ -199,47 +114,28 @@ public class ObjectService {
 
         RestSessionHolder session = sessionService.getSession(sessionId);
 
-        try {
+        return client.call("Failed to update object", "Object not found: " + objectId, () -> {
             // Get object type to normalize repeating attributes
             String objectType = getObjectType(session, objectId);
-            Map<String, Object> normalizedAttrs = normalizeAttributes(sessionId, objectType,
+            Map<String, Object> normalizedAttrs = normalizeAttributes(session, objectType,
                     request.getAttributes());
 
             Map<String, Object> payload = new HashMap<>();
             payload.put("properties", normalizedAttrs);
 
-            String payloadJson = objectMapper.writeValueAsString(payload);
+            String payloadJson = toJson(payload);
 
-            Map<String, Object> batchRequest = buildWritePermissionsBatchRequest(
-                    session.getRepository(), objectId,
-                    "POST", "/repositories/" + session.getRepository() + "/objects/" + objectId,
-                    payloadJson, "updateObject");
+            Map<String, RestServicesClient.BatchResult> results = client.batch(session, true, List.of(
+                    new RestServicesClient.BatchOperation("updateObject", "POST",
+                            objectUri(session, objectId), payloadJson),
+                    permissionsOperation(session, objectId)));
 
-            @SuppressWarnings("unchecked")
-            Map<String, Object> batchResponse = session.getWebClient().post()
-                    .uri("/repositories/{repo}/batches", session.getRepository())
-                    .bodyValue(batchRequest)
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
-
-            if (batchResponse == null) {
-                throw new RestBridgeException(ERROR_CODE, "No response from update");
+            if (results == null) {
+                throw new RestBridgeException(ERROR_CODE, "No response from update", HttpStatus.BAD_GATEWAY);
             }
 
-            return extractFromWriteBatchResponse(batchResponse, objectId, "updateObject", sessionId);
-
-        } catch (WebClientResponseException.NotFound e) {
-            throw new ObjectNotFoundException(objectId);
-        } catch (WebClientResponseException e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to update object: " + e.getResponseBodyAsString(), e);
-        } catch (RestBridgeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to update object: " + e.getMessage(), e);
-        }
+            return extractFromBatchResults(results, "updateObject", objectId, session);
+        });
     }
 
     /**
@@ -250,37 +146,18 @@ public class ObjectService {
 
         RestSessionHolder session = sessionService.getSession(sessionId);
 
-        try {
-            Map<String, Object> batchRequest = buildWritePermissionsBatchRequest(
-                    session.getRepository(), objectId,
-                    "PUT", "/repositories/" + session.getRepository() + "/objects/" + objectId + "/lock",
-                    null, "checkout");
+        return client.call("Failed to checkout object", "Object not found: " + objectId, () -> {
+            Map<String, RestServicesClient.BatchResult> results = client.batch(session, true, List.of(
+                    new RestServicesClient.BatchOperation("checkout", "PUT",
+                            objectUri(session, objectId) + "/lock", null),
+                    permissionsOperation(session, objectId)));
 
-            @SuppressWarnings("unchecked")
-            Map<String, Object> batchResponse = session.getWebClient().post()
-                    .uri("/repositories/{repo}/batches", session.getRepository())
-                    .bodyValue(batchRequest)
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
-
-            if (batchResponse == null) {
-                throw new RestBridgeException(ERROR_CODE, "No response from checkout");
+            if (results == null) {
+                throw new RestBridgeException(ERROR_CODE, "No response from checkout", HttpStatus.BAD_GATEWAY);
             }
 
-            return extractFromWriteBatchResponse(batchResponse, objectId, "checkout", sessionId);
-
-        } catch (WebClientResponseException.NotFound e) {
-            throw new ObjectNotFoundException(objectId);
-        } catch (WebClientResponseException e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to checkout object: " + e.getResponseBodyAsString(), e);
-        } catch (RestBridgeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to checkout object: " + e.getMessage(), e);
-        }
+            return extractFromBatchResults(results, "checkout", objectId, session);
+        });
     }
 
     /**
@@ -291,74 +168,50 @@ public class ObjectService {
 
         RestSessionHolder session = sessionService.getSession(sessionId);
 
-        try {
-            session.getWebClient().delete()
-                    .uri("/repositories/{repo}/objects/{objectId}/lock",
-                            session.getRepository(), objectId)
-                    .retrieve()
-                    .toBodilessEntity()
-                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
-
-        } catch (WebClientResponseException.NotFound e) {
-            throw new ObjectNotFoundException(objectId);
-        } catch (WebClientResponseException e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to cancel checkout: " + e.getResponseBodyAsString(), e);
-        } catch (Exception e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to cancel checkout: " + e.getMessage(), e);
-        }
+        client.call("Failed to cancel checkout", "Object not found: " + objectId, () ->
+                client.delete(session, "/repositories/{repo}/objects/{objectId}/lock",
+                        session.getRepository(), objectId));
     }
 
     /**
-     * Checkin an object using batch API to POST version + GET permissions in one request.
+     * Check in a checked-out object as a new version of its chronicle.
+     * The new version has a new object ID, so permissions are read for that ID.
      */
     public ObjectInfo checkin(String sessionId, String objectId, String versionLabel) {
-        log.debug("Checking in object {} via REST batch with label {}", objectId, versionLabel);
+        log.debug("Checking in object {} via REST with label {}", objectId, versionLabel);
 
         RestSessionHolder session = sessionService.getSession(sessionId);
 
-        try {
-            Map<String, Object> payload = new HashMap<>();
-            if (versionLabel != null && !versionLabel.isEmpty()) {
-                Map<String, Object> properties = new HashMap<>();
-                // r_version_label is a repeating attribute, must be sent as a list
-                properties.put("r_version_label", Collections.singletonList(versionLabel));
-                payload.put("properties", properties);
+        return client.call("Failed to checkin object", "Object not found: " + objectId, () -> {
+            String chronicleId = getChronicleId(session, objectId);
+
+            // REST Services rejects version-label=CURRENT; the new version gets CURRENT anyway
+            boolean sendLabel = versionLabel != null && !versionLabel.isBlank()
+                    && !"CURRENT".equals(versionLabel);
+
+            Map<String, Object> uriVariables = new HashMap<>();
+            uriVariables.put("repo", session.getRepository());
+            uriVariables.put("chronicleId", chronicleId);
+            uriVariables.put("objectId", objectId);
+            uriVariables.put("versionLabel", versionLabel);
+
+            Map<String, Object> response = client.post(session, uriBuilder -> {
+                uriBuilder.path("/repositories/{repo}/objects/{chronicleId}/versions")
+                        .queryParam("object-id", "{objectId}");
+                if (sendLabel) {
+                    uriBuilder.queryParam("version-label", "{versionLabel}");
+                }
+                return uriBuilder.build(uriVariables);
+            }, Collections.emptyMap());
+
+            if (response == null) {
+                throw new RestBridgeException(ERROR_CODE, "No response from checkin", HttpStatus.BAD_GATEWAY);
             }
 
-            String payloadJson = objectMapper.writeValueAsString(payload);
-
-            // Note: checkin creates a new version which may have a different object ID
-            // We fetch permissions for the new object returned by the checkin operation
-            Map<String, Object> batchRequest = buildCheckinBatchRequest(
-                    session.getRepository(), objectId, payloadJson);
-
-            @SuppressWarnings("unchecked")
-            Map<String, Object> batchResponse = session.getWebClient().post()
-                    .uri("/repositories/{repo}/batches", session.getRepository())
-                    .bodyValue(batchRequest)
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
-
-            if (batchResponse == null) {
-                throw new RestBridgeException(ERROR_CODE, "No response from checkin");
-            }
-
-            return extractFromCheckinBatchResponse(batchResponse, objectId, session, sessionId);
-
-        } catch (WebClientResponseException.NotFound e) {
-            throw new ObjectNotFoundException(objectId);
-        } catch (WebClientResponseException e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to checkin object: " + e.getResponseBodyAsString(), e);
-        } catch (RestBridgeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to checkin object: " + e.getMessage(), e);
-        }
+            ObjectInfo objectInfo = extractObjectInfoWithSession(response, session);
+            populatePermissions(session, objectInfo);
+            return objectInfo;
+        });
     }
 
     /**
@@ -369,9 +222,9 @@ public class ObjectService {
 
         RestSessionHolder session = sessionService.getSession(sessionId);
 
-        try {
+        return client.call("Failed to create object", null, () -> {
             // Normalize repeating attributes based on type definition
-            Map<String, Object> normalizedAttrs = normalizeAttributes(sessionId,
+            Map<String, Object> normalizedAttrs = normalizeAttributes(session,
                     request.getObjectType(), request.getAttributes());
 
             Map<String, Object> payload = new HashMap<>();
@@ -386,55 +239,25 @@ public class ObjectService {
             }
             payload.put("properties", properties);
 
-            // Determine the endpoint based on object type
-            String endpoint;
-            if (request.getObjectType().equals("dm_folder") ||
-                request.getObjectType().endsWith("_folder")) {
-                endpoint = "/repositories/{repo}/folders/{folderId}/folders";
-            } else if (request.getObjectType().equals("dm_cabinet") ||
-                       request.getObjectType().endsWith("_cabinet")) {
-                endpoint = "/repositories/{repo}/cabinets";
-            } else {
-                endpoint = "/repositories/{repo}/folders/{folderId}/documents";
-            }
+            String endpoint = createEndpoint(sessionId, request.getObjectType());
 
-            @SuppressWarnings("unchecked")
             Map<String, Object> response;
 
             if (endpoint.contains("{folderId}")) {
                 String folderId = resolveFolderId(session, request.getFolderPath());
-                response = session.getWebClient().post()
-                        .uri(endpoint, session.getRepository(), folderId)
-                        .bodyValue(payload)
-                        .retrieve()
-                        .bodyToMono(Map.class)
-                        .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+                response = client.post(session, endpoint, payload, session.getRepository(), folderId);
             } else {
-                response = session.getWebClient().post()
-                        .uri(endpoint, session.getRepository())
-                        .bodyValue(payload)
-                        .retrieve()
-                        .bodyToMono(Map.class)
-                        .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+                response = client.post(session, endpoint, payload, session.getRepository());
             }
 
             if (response == null) {
-                throw new RestBridgeException(ERROR_CODE, "No response from create");
+                throw new RestBridgeException(ERROR_CODE, "No response from create", HttpStatus.BAD_GATEWAY);
             }
 
-            ObjectInfo objectInfo = extractObjectInfoWithSession(response, sessionId);
+            ObjectInfo objectInfo = extractObjectInfoWithSession(response, session);
             populatePermissions(session, objectInfo);
             return objectInfo;
-
-        } catch (WebClientResponseException e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to create object: " + e.getResponseBodyAsString(), e);
-        } catch (RestBridgeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to create object: " + e.getMessage(), e);
-        }
+        });
     }
 
     /**
@@ -445,25 +268,11 @@ public class ObjectService {
 
         RestSessionHolder session = sessionService.getSession(sessionId);
 
-        try {
-            session.getWebClient().delete()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/repositories/{repo}/objects/{objectId}")
-                            .queryParam("del-version", allVersions ? "all" : "selected")
-                            .build(session.getRepository(), objectId))
-                    .retrieve()
-                    .toBodilessEntity()
-                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
-
-        } catch (WebClientResponseException.NotFound e) {
-            throw new ObjectNotFoundException(objectId);
-        } catch (WebClientResponseException e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to delete object: " + e.getResponseBodyAsString(), e);
-        } catch (Exception e) {
-            throw new RestBridgeException(ERROR_CODE,
-                    "Failed to delete object: " + e.getMessage(), e);
-        }
+        client.call("Failed to delete object", "Object not found: " + objectId, () ->
+                client.delete(session, uriBuilder -> uriBuilder
+                        .path("/repositories/{repo}/objects/{objectId}")
+                        .queryParam("del-version", allVersions ? "all" : "selected")
+                        .build(session.getRepository(), objectId)));
     }
 
     /**
@@ -472,38 +281,35 @@ public class ObjectService {
     @SuppressWarnings("unchecked")
     private String resolveFolderId(RestSessionHolder session, String folderPath) {
         if (folderPath == null || folderPath.isEmpty()) {
-            throw new RestBridgeException(ERROR_CODE, "Folder path is required for non-cabinet objects");
-        }
-
-        // If it looks like an object ID (16 hex chars), use it directly
-        if (folderPath.matches("[0-9a-fA-F]{16}")) {
-            return folderPath;
+            throw new RestBridgeException(ERROR_CODE, "Folder path is required for non-cabinet objects",
+                    HttpStatus.BAD_REQUEST);
         }
 
         try {
-            Map<String, Object> response = session.getWebClient().get()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/repositories/{repo}/folders")
-                            .queryParam("folder-path", folderPath)
-                            .build(session.getRepository()))
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+            if (folderPath.matches("[0-9a-fA-F]{16}")) {
+                client.get(session, "/repositories/{repo}/folders/{folderId}?links=false",
+                        session.getRepository(), folderPath);
+                return folderPath;
+            }
 
-            if (response != null) {
-                List<Map<String, Object>> entries =
-                        (List<Map<String, Object>>) response.get("entries");
-                if (entries != null && !entries.isEmpty()) {
-                    Map<String, Object> firstEntry = entries.get(0);
-                    String id = (String) firstEntry.get("id");
-                    if (id != null && id.contains("/")) {
-                        return id.substring(id.lastIndexOf('/') + 1);
-                    }
+            String folderId = null;
+            for (String segment : folderPath.split("/")) {
+                if (segment.isEmpty()) {
+                    continue;
+                }
+                folderId = findFolderId(session, folderId, segment);
+                if (folderId == null) {
+                    break;
                 }
             }
 
-            throw new ObjectNotFoundException("Folder not found: " + folderPath);
+            if (folderId == null) {
+                throw new ObjectNotFoundException("Folder not found: " + folderPath);
+            }
+            return folderId;
 
+        } catch (HttpClientErrorException.NotFound e) {
+            throw new ObjectNotFoundException("Folder not found: " + folderPath);
         } catch (ObjectNotFoundException e) {
             throw e;
         } catch (Exception e) {
@@ -513,84 +319,80 @@ public class ObjectService {
     }
 
     /**
+     * Find a folder by name in the cabinets, or under the parent folder when one is given.
+     * Returns null when no folder has that name.
+     */
+    @SuppressWarnings("unchecked")
+    private String findFolderId(RestSessionHolder session, String parentId, String name) {
+        String filter = "object_name='" + name.replace("'", "''") + "'";
+        Map<String, Object> response = client.get(session, uriBuilder -> parentId == null
+                ? uriBuilder.path("/repositories/{repo}/cabinets")
+                        .queryParam("filter", "{filter}")
+                        .build(session.getRepository(), filter)
+                : uriBuilder.path("/repositories/{repo}/folders/{folderId}/folders")
+                        .queryParam("filter", "{filter}")
+                        .build(session.getRepository(), parentId, filter));
+
+        if (response == null) {
+            return null;
+        }
+        List<Map<String, Object>> entries = (List<Map<String, Object>>) response.get("entries");
+        if (entries == null || entries.isEmpty()) {
+            return null;
+        }
+        return extractEntryInfo(entries.get(0)).getObjectId();
+    }
+
+    private String createEndpoint(String sessionId, String objectType) {
+        String type = objectType;
+        while (type != null && !type.isEmpty()) {
+            if (type.equals("dm_cabinet")) {
+                return "/repositories/{repo}/cabinets";
+            }
+            if (type.equals("dm_folder")) {
+                return "/repositories/{repo}/folders/{folderId}/folders";
+            }
+            type = typeService.getTypeInfo(sessionId, type).getSuperType();
+        }
+        return "/repositories/{repo}/folders/{folderId}/documents";
+    }
+
+    /**
      * Get the object type for an object by ID.
      * Used to determine which attributes are repeating before updates.
      */
     @SuppressWarnings("unchecked")
     private String getObjectType(RestSessionHolder session, String objectId) {
-        try {
-            Map<String, Object> response = session.getWebClient().get()
-                    .uri("/repositories/{repo}/objects/{objectId}",
-                            session.getRepository(), objectId)
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+        Map<String, Object> response = client.get(session,
+                "/repositories/{repo}/objects/{objectId}?view=r_object_type&links=false",
+                session.getRepository(), objectId);
 
-            if (response != null) {
-                Map<String, Object> properties = (Map<String, Object>) response.get("properties");
-                if (properties != null) {
-                    return (String) properties.getOrDefault("r_object_type", "dm_sysobject");
-                }
-            }
-            return "dm_sysobject";
-        } catch (Exception e) {
-            log.warn("Failed to get object type for {}, defaulting to dm_sysobject: {}",
-                    objectId, e.getMessage());
-            return "dm_sysobject";
+        if (response == null) {
+            throw new RestBridgeException(ERROR_CODE, "No response from object type lookup", HttpStatus.BAD_GATEWAY);
         }
+        Map<String, Object> properties = (Map<String, Object>) response.get("properties");
+        return PropertyUtils.str(properties, "r_object_type");
     }
 
     /**
-     * Get the set of repeating attribute names for a type, using cache.
+     * Get the chronicle ID for an object by ID.
+     * Checkin posts to the chronicle, with the checked-out version as object-id.
      */
-    private Set<String> getRepeatingAttributes(String sessionId, String typeName) {
-        Map<String, AttrMeta> meta = getAttributeMetadataWithSession(sessionId, typeName);
-        Set<String> repeating = new HashSet<>();
-        for (Map.Entry<String, AttrMeta> entry : meta.entrySet()) {
-            if (entry.getValue().repeating) {
-                repeating.add(entry.getKey());
-            }
+    @SuppressWarnings("unchecked")
+    private String getChronicleId(RestSessionHolder session, String objectId) {
+        Map<String, Object> response = client.get(session,
+                "/repositories/{repo}/objects/{objectId}?view=i_chronicle_id&links=false",
+                session.getRepository(), objectId);
+
+        if (response == null) {
+            throw new RestBridgeException(ERROR_CODE, "No response from chronicle id lookup", HttpStatus.BAD_GATEWAY);
         }
-        return repeating;
-    }
-
-    /**
-     * Normalize attributes for a given type, ensuring repeating attributes are lists.
-     * If an attribute is repeating but the value is a scalar, wrap it in a list.
-     */
-    private Map<String, Object> normalizeAttributes(String sessionId, String typeName,
-                                                     Map<String, Object> attributes) {
-        if (attributes == null || attributes.isEmpty()) {
-            return attributes;
-        }
-
-        Set<String> repeatingAttrs = getRepeatingAttributes(sessionId, typeName);
-        if (repeatingAttrs.isEmpty()) {
-            return attributes;
-        }
-
-        Map<String, Object> normalized = new HashMap<>(attributes);
-        for (Map.Entry<String, Object> entry : normalized.entrySet()) {
-            String attrName = entry.getKey();
-            Object value = entry.getValue();
-
-            if (repeatingAttrs.contains(attrName) && value != null && !(value instanceof List)) {
-                // Wrap scalar value in a list for repeating attribute
-                normalized.put(attrName, Collections.singletonList(value));
-                log.debug("Normalized repeating attribute {} from scalar to list", attrName);
-            }
-        }
-
-        return normalized;
+        Map<String, Object> properties = (Map<String, Object>) response.get("properties");
+        return (String) properties.get("i_chronicle_id");
     }
 
     @SuppressWarnings("unchecked")
-    private ObjectInfo extractObjectInfo(Map<String, Object> response) {
-        return extractObjectInfoWithSession(response, null);
-    }
-
-    @SuppressWarnings("unchecked")
-    private ObjectInfo extractObjectInfoWithSession(Map<String, Object> response, String sessionId) {
+    private ObjectInfo extractObjectInfoWithSession(Map<String, Object> response, RestSessionHolder session) {
         Map<String, Object> content = (Map<String, Object>) response.get("content");
         if (content == null) {
             content = response;
@@ -601,17 +403,14 @@ public class ObjectService {
             properties = new HashMap<>();
         }
 
-        String objectId = (String) properties.getOrDefault("r_object_id", "");
-        String typeName = (String) properties.getOrDefault("r_object_type", "");
-        String name = (String) properties.getOrDefault("object_name", "");
+        String objectId = PropertyUtils.str(properties, "r_object_id");
+        String typeName = PropertyUtils.str(properties, "r_object_type");
+        String name = PropertyUtils.str(properties, "object_name");
 
-        // Pre-populate attribute metadata cache if we have a session
-        if (sessionId != null && !typeName.isEmpty()) {
-            getAttributeMetadataWithSession(sessionId, typeName);
-        }
-
-        // Build attributes with type metadata
-        Map<String, AttributeValue> attributes = buildAttributesWithMetadata(properties, typeName);
+        Map<String, AttrMeta> attrMeta = typeName.isEmpty()
+                ? Collections.emptyMap()
+                : getAttributeMetadata(session, typeName);
+        Map<String, AttributeValue> attributes = buildAttributesWithMetadata(properties, attrMeta);
 
         return ObjectInfo.builder()
                 .objectId(objectId)
@@ -625,12 +424,9 @@ public class ObjectService {
      * Build attributes map with type metadata from properties.
      */
     private Map<String, AttributeValue> buildAttributesWithMetadata(
-            Map<String, Object> properties, String typeName) {
+            Map<String, Object> properties, Map<String, AttrMeta> attrMeta) {
 
         Map<String, AttributeValue> attributes = new HashMap<>();
-
-        // Get attribute metadata for this type (uses cache)
-        Map<String, AttrMeta> attrMeta = getAttributeMetadata(typeName);
 
         for (Map.Entry<String, Object> entry : properties.entrySet()) {
             String attrName = entry.getKey();
@@ -698,7 +494,7 @@ public class ObjectService {
         }
 
         // Remove dm_ prefix if present
-        String normalized = dctmType.toLowerCase();
+        String normalized = dctmType.toLowerCase(Locale.ROOT);
         if (normalized.startsWith("dm_")) {
             normalized = normalized.substring(3);
         }
@@ -725,46 +521,12 @@ public class ObjectService {
     }
 
     /**
-     * Get attribute metadata for a type, using cache. Uses stored session if available.
-     */
-    private Map<String, AttrMeta> getAttributeMetadata(String typeName) {
-        Map<String, AttrMeta> cached = attributeMetaCache.get(typeName);
-        if (cached != null) {
-            return cached;
-        }
-        // Return empty if not cached and no session context
-        log.debug("No cached metadata for type {}, returning empty", typeName);
-        return Collections.emptyMap();
-    }
-
-    /**
-     * Get attribute metadata for a type with session context, populating cache.
-     */
-    private Map<String, AttrMeta> getAttributeMetadataWithSession(String sessionId, String typeName) {
-        return attributeMetaCache.computeIfAbsent(typeName, t -> {
-            try {
-                TypeInfo typeInfo = typeService.getTypeInfo(sessionId, t);
-                Map<String, AttrMeta> metadata = new HashMap<>();
-                for (TypeInfo.AttributeInfo attr : typeInfo.getAttributes()) {
-                    String normalizedType = normalizeTypeName(attr.getDataType());
-                    metadata.put(attr.getName(), new AttrMeta(normalizedType, attr.isRepeating()));
-                }
-                log.debug("Cached {} attributes for type {}", metadata.size(), t);
-                return metadata;
-            } catch (Exception e) {
-                log.warn("Failed to get type info for {}: {}", t, e.getMessage());
-                return Collections.emptyMap();
-            }
-        });
-    }
-
-    /**
      * Extract ObjectInfo from list entry format (cabinets, folder contents).
      */
     private ObjectInfo extractEntryInfo(Map<String, Object> entry) {
-        String title = (String) entry.getOrDefault("title", "");
-        String summary = (String) entry.getOrDefault("summary", "");
-        String id = (String) entry.getOrDefault("id", "");
+        String title = PropertyUtils.str(entry, "title");
+        String summary = PropertyUtils.str(entry, "summary");
+        String id = PropertyUtils.str(entry, "id");
 
         // Extract object ID from id URL
         String objectId = "";
@@ -790,18 +552,14 @@ public class ObjectService {
      */
     private void populatePermissions(RestSessionHolder session, ObjectInfo objectInfo) {
         try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> response = session.getWebClient().get()
-                    .uri("/repositories/{repo}/objects/{objectId}/permissions",
-                            session.getRepository(), objectInfo.getObjectId())
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+            Map<String, Object> response = client.get(session,
+                    "/repositories/{repo}/objects/{objectId}/permissions",
+                    session.getRepository(), objectInfo.getObjectId());
 
             if (response != null) {
                 extractPermissionInfo(response, objectInfo);
             }
-        } catch (WebClientResponseException.NotFound e) {
+        } catch (HttpClientErrorException.NotFound e) {
             // Object may not support permissions (non-sysobject)
             log.debug("No permissions available for object {}", objectInfo.getObjectId());
         } catch (Exception e) {
@@ -849,305 +607,159 @@ public class ObjectService {
         if (basicPermission != null) {
             objectInfo.setPermissionLevel(basicPermission);
             objectInfo.setPermissionLabel(permissionLabel != null ?
-                    permissionLabel.toUpperCase() : PermissionUtils.permitToLabel(basicPermission));
+                    permissionLabel.toUpperCase(Locale.ROOT) : PermissionUtils.permitToLabel(basicPermission));
         }
 
         objectInfo.setExtendedPermissions(extendedPermissions.isEmpty() ?
                 Collections.emptyList() : extendedPermissions);
     }
 
-    /**
-     * Build a batch request to fetch object and permissions in one call.
-     */
-    private Map<String, Object> buildObjectPermissionsBatchRequest(String repository, String objectId) {
-        Map<String, Object> batch = new HashMap<>();
-        batch.put("transactional", false);
-        batch.put("sequential", false);
-        batch.put("on-error", "CONTINUE");
-
-        List<Map<String, Object>> operations = new ArrayList<>();
-
-        // Operation 1: Get object
-        Map<String, Object> op1 = new HashMap<>();
-        op1.put("id", "getObject");
-        Map<String, Object> req1 = new HashMap<>();
-        req1.put("method", "GET");
-        req1.put("uri", "/repositories/" + repository + "/objects/" + objectId);
-        op1.put("request", req1);
-        operations.add(op1);
-
-        // Operation 2: Get permissions
-        Map<String, Object> op2 = new HashMap<>();
-        op2.put("id", "getPermissions");
-        Map<String, Object> req2 = new HashMap<>();
-        req2.put("method", "GET");
-        req2.put("uri", "/repositories/" + repository + "/objects/" + objectId + "/permissions");
-        op2.put("request", req2);
-        operations.add(op2);
-
-        batch.put("operations", operations);
-        return batch;
+    private static String objectUri(RestSessionHolder session, String objectId) {
+        return "/repositories/" + session.getRepository() + "/objects/" + objectId;
     }
 
-    /**
-     * Build a batch request to perform a write operation + GET permissions in one call.
-     * Uses sequential execution to ensure write completes before permissions fetch.
-     */
-    private Map<String, Object> buildWritePermissionsBatchRequest(
-            String repository, String objectId, String method, String uri,
-            String entityJson, String operationId) {
+    private static RestServicesClient.BatchOperation permissionsOperation(RestSessionHolder session,
+                                                                          String objectId) {
+        return new RestServicesClient.BatchOperation(PERMISSIONS_OPERATION, "GET",
+                objectUri(session, objectId) + "/permissions", null);
+    }
 
-        Map<String, Object> batch = new HashMap<>();
-        batch.put("transactional", false);
-        batch.put("sequential", true);  // Write must complete before permissions read
-        batch.put("on-error", "CONTINUE");
-
-        List<Map<String, Object>> operations = new ArrayList<>();
-
-        // Operation 1: Write operation (POST/PUT)
-        Map<String, Object> op1 = new HashMap<>();
-        op1.put("id", operationId);
-        Map<String, Object> req1 = new HashMap<>();
-        req1.put("method", method);
-        req1.put("uri", uri);
-        if (entityJson != null) {
-            req1.put("entity", entityJson);
-            List<Map<String, Object>> headers = new ArrayList<>();
-            Map<String, Object> contentTypeHeader = new HashMap<>();
-            contentTypeHeader.put("name", "Content-Type");
-            contentTypeHeader.put("value", "application/vnd.emc.documentum+json");
-            headers.add(contentTypeHeader);
-            req1.put("headers", headers);
+    private List<ObjectInfo> extractEntries(List<Map<String, Object>> entries) {
+        List<ObjectInfo> results = new ArrayList<>();
+        for (Map<String, Object> entry : entries) {
+            results.add(extractEntryInfo(entry));
         }
-        op1.put("request", req1);
-        operations.add(op1);
-
-        // Operation 2: Get permissions
-        Map<String, Object> op2 = new HashMap<>();
-        op2.put("id", "getPermissions");
-        Map<String, Object> req2 = new HashMap<>();
-        req2.put("method", "GET");
-        req2.put("uri", "/repositories/" + repository + "/objects/" + objectId + "/permissions");
-        op2.put("request", req2);
-        operations.add(op2);
-
-        batch.put("operations", operations);
-        return batch;
+        return results;
     }
 
-    /**
-     * Build a batch request for checkin operation.
-     * Checkin only includes the POST - permissions must be fetched separately
-     * since the new version may have a different object ID.
-     */
-    private Map<String, Object> buildCheckinBatchRequest(
-            String repository, String objectId, String entityJson) {
-
-        Map<String, Object> batch = new HashMap<>();
-        batch.put("transactional", false);
-        batch.put("sequential", false);
-        batch.put("on-error", "CONTINUE");
-
-        List<Map<String, Object>> operations = new ArrayList<>();
-
-        // Operation 1: Checkin (creates new version)
-        Map<String, Object> op1 = new HashMap<>();
-        op1.put("id", "checkin");
-        Map<String, Object> req1 = new HashMap<>();
-        req1.put("method", "POST");
-        req1.put("uri", "/repositories/" + repository + "/objects/" + objectId + "/versions?object-id=" + objectId);
-        if (entityJson != null) {
-            req1.put("entity", entityJson);
-            List<Map<String, Object>> headers = new ArrayList<>();
-            Map<String, Object> contentTypeHeader = new HashMap<>();
-            contentTypeHeader.put("name", "Content-Type");
-            contentTypeHeader.put("value", "application/vnd.emc.documentum+json");
-            headers.add(contentTypeHeader);
-            req1.put("headers", headers);
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException(e.getMessage(), e);
         }
-        op1.put("request", req1);
-        operations.add(op1);
-
-        batch.put("operations", operations);
-        return batch;
     }
 
     /**
-     * Extract ObjectInfo and permissions from a batch response.
+     * Extract ObjectInfo from the main operation of a batch, and its permissions from the permissions operation.
      */
     @SuppressWarnings("unchecked")
-    private ObjectInfo extractFromBatchResponse(Map<String, Object> batchResponse, String objectId,
-                                                 String sessionId) {
-        List<Map<String, Object>> operations =
-                (List<Map<String, Object>>) batchResponse.get("operations");
-
-        if (operations == null || operations.isEmpty()) {
-            throw new ObjectNotFoundException(objectId);
+    private ObjectInfo extractFromBatchResults(Map<String, RestServicesClient.BatchResult> results,
+                                               String operationId, String objectId,
+                                               RestSessionHolder session) {
+        if (results.isEmpty()) {
+            throw new ObjectNotFoundException("Object not found: " + objectId);
         }
 
         ObjectInfo objectInfo = null;
 
-        for (Map<String, Object> operation : operations) {
-            String opId = (String) operation.get("id");
-            Map<String, Object> response = (Map<String, Object>) operation.get("response");
-
-            if (response == null) {
-                continue;
+        RestServicesClient.BatchResult main = results.get(operationId);
+        if (main != null) {
+            Integer status = main.getStatus();
+            String entity = main.getEntity();
+            if (status != null && status == 404) {
+                throw new ObjectNotFoundException("Object not found: " + objectId);
             }
-
-            Integer status = (Integer) response.get("status");
-            String entity = (String) response.get("entity");
-
-            if ("getObject".equals(opId)) {
-                if (status != null && status == 404) {
-                    throw new ObjectNotFoundException(objectId);
-                }
-                if (entity != null && status != null && status == 200) {
-                    try {
-                        Map<String, Object> objectData = objectMapper.readValue(entity, Map.class);
-                        objectInfo = extractObjectInfoWithSession(objectData, sessionId);
-                    } catch (JsonProcessingException e) {
-                        log.warn("Failed to parse object response: {}", e.getMessage());
-                    }
-                }
-            } else if ("getPermissions".equals(opId) && objectInfo != null) {
-                if (entity != null && status != null && status == 200) {
-                    try {
-                        Map<String, Object> permData = objectMapper.readValue(entity, Map.class);
-                        extractPermissionInfo(permData, objectInfo);
-                    } catch (JsonProcessingException e) {
-                        log.warn("Failed to parse permissions response: {}", e.getMessage());
-                    }
+            if (status != null && status >= 400) {
+                throw new RestBridgeException(ERROR_CODE,
+                        "Batch operation " + operationId + " failed with status " + status + ": " + entity,
+                        RestBridgeException.upstreamStatus(status));
+            }
+            if (entity != null && status != null && (status == 200 || status == 201)) {
+                try {
+                    Map<String, Object> objectData = objectMapper.readValue(entity, Map.class);
+                    objectInfo = extractObjectInfoWithSession(objectData, session);
+                } catch (JsonProcessingException e) {
+                    log.warn("Failed to parse {} response: {}", operationId, e.getMessage());
                 }
             }
         }
 
         if (objectInfo == null) {
-            throw new ObjectNotFoundException(objectId);
+            throw new RestBridgeException(ERROR_CODE, "No valid response from write operation", HttpStatus.BAD_GATEWAY);
+        }
+
+        RestServicesClient.BatchResult permissions = results.get(PERMISSIONS_OPERATION);
+        if (permissions != null && permissions.getEntity() != null
+                && permissions.getStatus() != null && permissions.getStatus() == 200) {
+            try {
+                Map<String, Object> permData = objectMapper.readValue(permissions.getEntity(), Map.class);
+                extractPermissionInfo(permData, objectInfo);
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to parse permissions response: {}", e.getMessage());
+            }
         }
 
         return objectInfo;
     }
 
     /**
-     * Extract ObjectInfo and permissions from a write operation batch response.
+     * Get the set of repeating attribute names for a type.
      */
-    @SuppressWarnings("unchecked")
-    private ObjectInfo extractFromWriteBatchResponse(
-            Map<String, Object> batchResponse, String objectId, String writeOperationId,
-            String sessionId) {
-
-        List<Map<String, Object>> operations =
-                (List<Map<String, Object>>) batchResponse.get("operations");
-
-        if (operations == null || operations.isEmpty()) {
-            throw new ObjectNotFoundException(objectId);
-        }
-
-        ObjectInfo objectInfo = null;
-
-        for (Map<String, Object> operation : operations) {
-            String opId = (String) operation.get("id");
-            Map<String, Object> response = (Map<String, Object>) operation.get("response");
-
-            if (response == null) {
-                continue;
-            }
-
-            Integer status = (Integer) response.get("status");
-            String entity = (String) response.get("entity");
-
-            if (writeOperationId.equals(opId)) {
-                if (status != null && status == 404) {
-                    throw new ObjectNotFoundException(objectId);
-                }
-                if (status != null && status >= 400) {
-                    throw new RestBridgeException(ERROR_CODE,
-                            "Write operation failed with status " + status + ": " + entity);
-                }
-                if (entity != null && status != null && (status == 200 || status == 201)) {
-                    try {
-                        Map<String, Object> objectData = objectMapper.readValue(entity, Map.class);
-                        objectInfo = extractObjectInfoWithSession(objectData, sessionId);
-                    } catch (JsonProcessingException e) {
-                        log.warn("Failed to parse write response: {}", e.getMessage());
-                    }
-                }
-            } else if ("getPermissions".equals(opId) && objectInfo != null) {
-                if (entity != null && status != null && status == 200) {
-                    try {
-                        Map<String, Object> permData = objectMapper.readValue(entity, Map.class);
-                        extractPermissionInfo(permData, objectInfo);
-                    } catch (JsonProcessingException e) {
-                        log.warn("Failed to parse permissions response: {}", e.getMessage());
-                    }
-                }
+    private Set<String> getRepeatingAttributes(RestSessionHolder session, String typeName) {
+        Map<String, AttrMeta> meta = getAttributeMetadata(session, typeName);
+        Set<String> repeating = new HashSet<>();
+        for (Map.Entry<String, AttrMeta> entry : meta.entrySet()) {
+            if (entry.getValue().repeating) {
+                repeating.add(entry.getKey());
             }
         }
-
-        if (objectInfo == null) {
-            throw new RestBridgeException(ERROR_CODE, "No valid response from write operation");
-        }
-
-        return objectInfo;
+        return repeating;
     }
 
     /**
-     * Extract ObjectInfo from checkin batch response.
-     * Checkin creates a new version which may have a different object ID,
-     * so we fetch permissions separately for the new object.
+     * Get attribute metadata for a type from the session's cache, looking the type up on a miss.
+     * A failed lookup is not cached, so the next request looks the type up again.
      */
-    @SuppressWarnings("unchecked")
-    private ObjectInfo extractFromCheckinBatchResponse(
-            Map<String, Object> batchResponse, String originalObjectId, RestSessionHolder session,
-            String sessionId) {
-
-        List<Map<String, Object>> operations =
-                (List<Map<String, Object>>) batchResponse.get("operations");
-
-        if (operations == null || operations.isEmpty()) {
-            throw new ObjectNotFoundException(originalObjectId);
+    private Map<String, AttrMeta> getAttributeMetadata(RestSessionHolder session, String typeName) {
+        Map<String, Map<String, AttrMeta>> cache = session.getAttributeMetadata();
+        Map<String, AttrMeta> cached = cache.get(typeName);
+        if (cached != null) {
+            return cached;
         }
-
-        ObjectInfo objectInfo = null;
-
-        for (Map<String, Object> operation : operations) {
-            String opId = (String) operation.get("id");
-            Map<String, Object> response = (Map<String, Object>) operation.get("response");
-
-            if (response == null) {
-                continue;
+        try {
+            TypeInfo typeInfo = typeService.getTypeInfo(session.getSessionInfo().getSessionId(), typeName);
+            Map<String, AttrMeta> metadata = new HashMap<>();
+            for (TypeInfo.AttributeInfo attr : typeInfo.getAttributes()) {
+                String normalizedType = normalizeTypeName(attr.getDataType());
+                metadata.put(attr.getName(), new AttrMeta(normalizedType, attr.isRepeating()));
             }
+            cache.put(typeName, metadata);
+            log.debug("Cached {} attributes for type {}", metadata.size(), typeName);
+            return metadata;
+        } catch (Exception e) {
+            log.warn("Failed to get type info for {}: {}", typeName, e.getMessage());
+            return Collections.emptyMap();
+        }
+    }
 
-            Integer status = (Integer) response.get("status");
-            String entity = (String) response.get("entity");
+    /**
+     * Normalize attributes for a given type, ensuring repeating attributes are lists.
+     * If an attribute is repeating but the value is a scalar, wrap it in a list.
+     */
+    private Map<String, Object> normalizeAttributes(RestSessionHolder session, String typeName,
+                                                     Map<String, Object> attributes) {
+        if (attributes == null || attributes.isEmpty()) {
+            return attributes;
+        }
 
-            if ("checkin".equals(opId)) {
-                if (status != null && status == 404) {
-                    throw new ObjectNotFoundException(originalObjectId);
-                }
-                if (status != null && status >= 400) {
-                    throw new RestBridgeException(ERROR_CODE,
-                            "Checkin failed with status " + status + ": " + entity);
-                }
-                if (entity != null && status != null && (status == 200 || status == 201)) {
-                    try {
-                        Map<String, Object> objectData = objectMapper.readValue(entity, Map.class);
-                        objectInfo = extractObjectInfoWithSession(objectData, sessionId);
-                    } catch (JsonProcessingException e) {
-                        log.warn("Failed to parse checkin response: {}", e.getMessage());
-                    }
-                }
+        Set<String> repeatingAttrs = getRepeatingAttributes(session, typeName);
+        if (repeatingAttrs.isEmpty()) {
+            return attributes;
+        }
+
+        Map<String, Object> normalized = new HashMap<>(attributes);
+        for (Map.Entry<String, Object> entry : normalized.entrySet()) {
+            String attrName = entry.getKey();
+            Object value = entry.getValue();
+
+            if (repeatingAttrs.contains(attrName) && value != null && !(value instanceof List)) {
+                // Wrap scalar value in a list for repeating attribute
+                normalized.put(attrName, Collections.singletonList(value));
+                log.debug("Normalized repeating attribute {} from scalar to list", attrName);
             }
         }
 
-        if (objectInfo == null) {
-            throw new RestBridgeException(ERROR_CODE, "No valid response from checkin operation");
-        }
-
-        // Fetch permissions for the new version (may have different object ID)
-        populatePermissions(session, objectInfo);
-
-        return objectInfo;
+        return normalized;
     }
 }

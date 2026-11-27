@@ -1,53 +1,57 @@
 package com.spire.restbridge.controller;
 
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.info.BuildProperties;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
 
-import java.util.Map;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-import static org.junit.jupiter.api.Assertions.*;
-
-/**
- * Unit tests for StatusController.
- */
+@WebMvcTest(StatusController.class)
 class StatusControllerTest {
 
-    private StatusController statusController;
+    @Autowired
+    private MockMvc mockMvc;
 
-    @BeforeEach
-    void setUp() {
-        statusController = new StatusController();
+    @MockBean
+    private BuildProperties buildProperties;
+
+    @Test
+    void health_returnsOk() throws Exception {
+        mockMvc.perform(get("/health"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ok"));
     }
 
     @Test
-    void health_returnsOk() {
-        ResponseEntity<Map<String, String>> response = statusController.health();
+    void serviceStatus_returnsServiceInfo() throws Exception {
+        when(buildProperties.getVersion()).thenReturn("2.3.4");
 
-        assertEquals(200, response.getStatusCode().value());
-        Map<String, String> body = response.getBody();
-        assertNotNull(body);
-        assertEquals("ok", body.get("status"));
+        mockMvc.perform(get("/api/v1/status"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.service").value("rest-bridge"))
+                .andExpect(jsonPath("$.backend").value("REST"))
+                .andExpect(jsonPath("$.version").value("2.3.4"))
+                .andExpect(jsonPath("$.description").isString());
     }
 
     @Test
-    void status_returnsServiceInfo() {
-        ResponseEntity<Map<String, Object>> response = statusController.status();
-
-        assertEquals(200, response.getStatusCode().value());
-        Map<String, Object> body = response.getBody();
-        assertNotNull(body);
-        assertEquals("rest-bridge", body.get("service"));
-        assertEquals("REST", body.get("backend"));
-        assertNotNull(body.get("version"));
+    void unknownPath_returns404() throws Exception {
+        mockMvc.perform(get("/api/v1/nothing"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"));
     }
 
     @Test
-    void status_includesDescription() {
-        ResponseEntity<Map<String, Object>> response = statusController.status();
-
-        Map<String, Object> body = response.getBody();
-        assertNotNull(body);
-        assertTrue(body.get("description").toString().contains("REST"));
+    void unknownPath_acceptXml_returns404Json() throws Exception {
+        mockMvc.perform(get("/api/v1/nothing").accept(MediaType.APPLICATION_XML))
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"));
     }
 }

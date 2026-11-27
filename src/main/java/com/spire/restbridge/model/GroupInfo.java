@@ -1,5 +1,7 @@
 package com.spire.restbridge.model;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -14,6 +16,9 @@ import java.util.List;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonAutoDetect(
+        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
+        setterVisibility = JsonAutoDetect.Visibility.NONE)
 public class GroupInfo {
 
     private String objectId;
@@ -21,7 +26,13 @@ public class GroupInfo {
     private String description;
     private String groupClass;
     private String groupAdmin;
+    private String ownerName;
+    private String groupAddress;
+    private String groupSource;
+    @JsonProperty("isPrivate")
     private boolean isPrivate;
+    @JsonProperty("isDynamic")
+    private boolean isDynamic;
     private List<String> usersNames;
     private List<String> groupsNames;
 }

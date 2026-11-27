@@ -1,5 +1,6 @@
 package com.spire.restbridge.controller;
 
+import com.spire.restbridge.config.ErrorResponses;
 import com.spire.restbridge.dto.CreateObjectRequest;
 import com.spire.restbridge.dto.ErrorResponse;
 import com.spire.restbridge.dto.UpdateObjectRequest;
@@ -27,6 +28,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1")
 @Tag(name = "Objects", description = "Documentum object operations")
+@ErrorResponses(session = true)
 public class ObjectController {
 
     private final ObjectService objectService;
@@ -50,7 +52,7 @@ public class ObjectController {
         ),
         @ApiResponse(
             responseCode = "404",
-            description = "Object not found",
+            description = "Object or session not found",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))
         )
     })
@@ -77,6 +79,18 @@ public class ObjectController {
         summary = "List folder contents by ID",
         description = "Lists all objects in a folder by its object ID"
     )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "Folder contents retrieved",
+            content = @Content(array = @ArraySchema(schema = @Schema(implementation = ObjectInfo.class)))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Folder or session not found",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+        )
+    })
     public ResponseEntity<List<ObjectInfo>> listFolderContentsById(
             @Parameter(description = "Folder object ID") @PathVariable String folderId,
             @Parameter(description = "Session ID") @RequestParam String sessionId) {
@@ -89,6 +103,18 @@ public class ObjectController {
         summary = "Update object",
         description = "Updates attributes of a Documentum object"
     )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "Object updated",
+            content = @Content(schema = @Schema(implementation = ObjectInfo.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Object or session not found",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+        )
+    })
     public ResponseEntity<ObjectInfo> updateObject(
             @Parameter(description = "Object ID (r_object_id)") @PathVariable String objectId,
             @Valid @RequestBody UpdateObjectRequest request) {
@@ -103,7 +129,7 @@ public class ObjectController {
     )
     public ResponseEntity<List<TypeInfo>> listTypes(
             @Parameter(description = "Session ID") @RequestParam String sessionId,
-            @Parameter(description = "Type name pattern") @RequestParam(required = false) String pattern) {
+            @Parameter(description = "Type name pattern (supports * wildcard, e.g., dm_*)") @RequestParam(required = false) String pattern) {
         List<TypeInfo> types = typeService.listTypes(sessionId, pattern);
         return ResponseEntity.ok(types);
     }
@@ -113,6 +139,18 @@ public class ObjectController {
         summary = "Get type info",
         description = "Gets detailed information about a Documentum object type"
     )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "Type info retrieved",
+            content = @Content(schema = @Schema(implementation = TypeInfo.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Type or session not found",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+        )
+    })
     public ResponseEntity<TypeInfo> getTypeInfo(
             @Parameter(description = "Type name") @PathVariable String typeName,
             @Parameter(description = "Session ID") @RequestParam String sessionId) {
@@ -127,6 +165,18 @@ public class ObjectController {
         summary = "Checkout object",
         description = "Checks out (locks) a Documentum object for editing"
     )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "Object checked out",
+            content = @Content(schema = @Schema(implementation = ObjectInfo.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Object or session not found",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+        )
+    })
     public ResponseEntity<ObjectInfo> checkout(
             @Parameter(description = "Object ID") @PathVariable String objectId,
             @Parameter(description = "Session ID") @RequestParam String sessionId) {
@@ -139,6 +189,14 @@ public class ObjectController {
         summary = "Cancel checkout",
         description = "Cancels the checkout (unlocks) a Documentum object"
     )
+    @ApiResponses({
+        @ApiResponse(responseCode = "204", description = "Checkout cancelled"),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Object or session not found",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+        )
+    })
     public ResponseEntity<Void> cancelCheckout(
             @Parameter(description = "Object ID") @PathVariable String objectId,
             @Parameter(description = "Session ID") @RequestParam String sessionId) {
@@ -151,6 +209,18 @@ public class ObjectController {
         summary = "Checkin object",
         description = "Checks in a Documentum object, creating a new version"
     )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "Object checked in",
+            content = @Content(schema = @Schema(implementation = ObjectInfo.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Object or session not found",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+        )
+    })
     public ResponseEntity<ObjectInfo> checkin(
             @Parameter(description = "Object ID") @PathVariable String objectId,
             @Parameter(description = "Session ID") @RequestParam String sessionId,
@@ -166,6 +236,18 @@ public class ObjectController {
         summary = "Create object",
         description = "Creates a new Documentum object"
     )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "201",
+            description = "Object created",
+            content = @Content(schema = @Schema(implementation = ObjectInfo.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Type, folder or session not found",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+        )
+    })
     public ResponseEntity<ObjectInfo> createObject(@Valid @RequestBody CreateObjectRequest request) {
         ObjectInfo info = objectService.createObject(request.getSessionId(), request);
         return ResponseEntity.status(201).body(info);
@@ -176,6 +258,14 @@ public class ObjectController {
         summary = "Delete object",
         description = "Deletes a Documentum object"
     )
+    @ApiResponses({
+        @ApiResponse(responseCode = "204", description = "Object deleted"),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Object or session not found",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+        )
+    })
     public ResponseEntity<Void> deleteObject(
             @Parameter(description = "Object ID") @PathVariable String objectId,
             @Parameter(description = "Session ID") @RequestParam String sessionId,

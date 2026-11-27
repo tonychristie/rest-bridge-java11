@@ -1,5 +1,6 @@
 package com.spire.restbridge.controller;
 
+import com.spire.restbridge.config.ErrorResponses;
 import com.spire.restbridge.dto.ConnectRequest;
 import com.spire.restbridge.dto.ConnectResponse;
 import com.spire.restbridge.dto.DisconnectRequest;
@@ -23,6 +24,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/v1")
 @Tag(name = "Session", description = "Session management operations")
+@ErrorResponses
 public class SessionController {
 
     private final SessionService sessionService;
@@ -43,13 +45,33 @@ public class SessionController {
             content = @Content(schema = @Schema(implementation = ConnectResponse.class))
         ),
         @ApiResponse(
-            responseCode = "503",
-            description = "Connection failed",
+            responseCode = "400",
+            description = "Invalid request, or the endpoint is not an absolute http or https URL",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))
         ),
         @ApiResponse(
-            responseCode = "400",
-            description = "Invalid request",
+            responseCode = "401",
+            description = "Wrong user name or password",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Repository not found",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+        ),
+        @ApiResponse(
+            responseCode = "502",
+            description = "REST Services error, or no valid response from REST Services",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+        ),
+        @ApiResponse(
+            responseCode = "503",
+            description = "REST endpoint cannot be reached",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))
+        ),
+        @ApiResponse(
+            responseCode = "504",
+            description = "REST endpoint did not answer within the timeout",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))
         )
     })
@@ -64,10 +86,10 @@ public class SessionController {
         description = "Closes an existing session and releases resources"
     )
     @ApiResponses({
-        @ApiResponse(responseCode = "204", description = "Session closed successfully"),
+        @ApiResponse(responseCode = "204", description = "Session closed, or no session had the id"),
         @ApiResponse(
-            responseCode = "404",
-            description = "Session not found",
+            responseCode = "400",
+            description = "Invalid request",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))
         )
     })
@@ -89,7 +111,7 @@ public class SessionController {
         ),
         @ApiResponse(
             responseCode = "404",
-            description = "Session not found",
+            description = "Session not found or expired",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))
         )
     })

@@ -1,13 +1,23 @@
 package com.spire.restbridge.exception;
 
 import com.spire.restbridge.dto.ErrorResponse;
+import javax.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.NoHandlerFoundException;
 
 import java.util.stream.Collectors;
 
@@ -19,54 +29,15 @@ public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    @ExceptionHandler(ConnectionException.class)
-    public ResponseEntity<ErrorResponse> handleConnectionException(ConnectionException e) {
-        log.warn("Connection error: {}", e.getMessage());
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
-    }
-
-    @ExceptionHandler(SessionNotFoundException.class)
-    public ResponseEntity<ErrorResponse> handleSessionNotFoundException(SessionNotFoundException e) {
-        log.warn("Session not found: {}", e.getMessage());
-        return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
-    }
-
-    @ExceptionHandler(ObjectNotFoundException.class)
-    public ResponseEntity<ErrorResponse> handleObjectNotFoundException(ObjectNotFoundException e) {
-        log.warn("Object not found: {}", e.getMessage());
-        return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
-    }
-
-    @ExceptionHandler(AggregateQueryNotSupportedException.class)
-    public ResponseEntity<ErrorResponse> handleAggregateQueryNotSupportedException(
-            AggregateQueryNotSupportedException e) {
-        log.warn("Aggregate query not supported: {}", e.getMessage());
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ErrorResponse.of("AGGREGATE_QUERY_NOT_SUPPORTED", e.getMessage()));
-    }
-
-    @ExceptionHandler(DqlException.class)
-    public ResponseEntity<ErrorResponse> handleDqlException(DqlException e) {
-        log.warn("DQL error: {}", e.getMessage());
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
-    }
-
-    @ExceptionHandler(DqlNotAvailableException.class)
-    public ResponseEntity<ErrorResponse> handleDqlNotAvailableException(DqlNotAvailableException e) {
-        log.warn("DQL not available: {}", e.getMessage());
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
-    }
-
     @ExceptionHandler(RestBridgeException.class)
     public ResponseEntity<ErrorResponse> handleRestBridgeException(RestBridgeException e) {
-        log.error("REST Bridge error: {}", e.getMessage(), e);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
+        HttpStatus status = e.getStatus();
+        if (status.is5xxServerError()) {
+            log.error("{} {}: {}", status.value(), e.getCode(), e.getMessage(), e);
+        } else {
+            log.warn("{} {}: {}", status.value(), e.getCode(), e.getMessage());
+        }
+        return jsonError(status, e.getCode(), e.getMessage());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -75,14 +46,74 @@ public class GlobalExceptionHandler {
                 .map(fe -> fe.getField() + ": " + fe.getDefaultMessage())
                 .collect(Collectors.joining(", "));
         log.warn("Validation error: {}", message);
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ErrorResponse.of("VALIDATION_ERROR", message));
+        return jsonError(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", message);
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ErrorResponse> handleMissingParameter(MissingServletRequestParameterException e) {
+        return requestError(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR",
+                "Missing request parameter: " + e.getParameterName());
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        return requestError(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR",
+                "Invalid value for parameter " + e.getName() + ": " + e.getValue());
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException e) {
+        return requestError(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR",
+                "Request body is missing or is not valid JSON");
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMethodNotSupported(HttpRequestMethodNotSupportedException e,
+                                                                  HttpServletRequest request) {
+        return requestError(HttpStatus.METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED",
+                "Method " + e.getMethod() + " is not supported for " + request.getRequestURI());
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException e,
+                                                                     HttpServletRequest request) {
+        MediaType contentType = e.getContentType();
+        String type = contentType != null
+                ? contentType.getType() + "/" + contentType.getSubtype()
+                : request.getContentType();
+        return requestError(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE",
+                "Content type " + type + " is not supported");
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<ErrorResponse> handleMediaTypeNotAcceptable(HttpMediaTypeNotAcceptableException e,
+                                                                      HttpServletRequest request) {
+        return requestError(HttpStatus.NOT_ACCEPTABLE, "NOT_ACCEPTABLE",
+                "Accept " + request.getHeader(HttpHeaders.ACCEPT) + " is not supported, use application/json");
+    }
+
+    @ExceptionHandler(NoHandlerFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNoHandlerFound(NoHandlerFoundException e) {
+        return requestError(HttpStatus.NOT_FOUND, "NOT_FOUND",
+                "No endpoint " + e.getHttpMethod() + " " + e.getRequestURL());
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleException(Exception e) {
         log.error("Unexpected error: {}", e.getMessage(), e);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ErrorResponse.of("INTERNAL_ERROR", "An unexpected error occurred: " + e.getMessage()));
+        return jsonError(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR",
+                "An unexpected error occurred: " + e.getMessage());
+    }
+
+    private ResponseEntity<ErrorResponse> requestError(HttpStatus status, String code, String message) {
+        log.warn("{} {}: {}", status.value(), code, message);
+        return jsonError(status, code, message);
+    }
+
+    // A preset content type stops Spring matching the body against the Accept header.
+    private ResponseEntity<ErrorResponse> jsonError(HttpStatus status, String code, String message) {
+        return ResponseEntity.status(status)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(ErrorResponse.of(code, message));
     }
 }

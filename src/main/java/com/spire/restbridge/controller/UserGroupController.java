@@ -1,5 +1,6 @@
 package com.spire.restbridge.controller;
 
+import com.spire.restbridge.config.ErrorResponses;
 import com.spire.restbridge.dto.ErrorResponse;
 import com.spire.restbridge.model.GroupInfo;
 import com.spire.restbridge.model.UserInfo;
@@ -27,6 +28,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1")
 @Tag(name = "Users and Groups", description = "User and group operations using native REST endpoints")
+@ErrorResponses(session = true)
 public class UserGroupController {
 
     private final UserGroupService userGroupService;
@@ -49,7 +51,7 @@ public class UserGroupController {
     })
     public ResponseEntity<List<UserInfo>> listUsers(
             @Parameter(description = "Session ID") @RequestParam String sessionId,
-            @Parameter(description = "User name pattern filter") @RequestParam(required = false) String pattern) {
+            @Parameter(description = "User name pattern filter (supports * wildcard)") @RequestParam(required = false) String pattern) {
         List<UserInfo> users = userGroupService.listUsers(sessionId, pattern);
         return ResponseEntity.ok(users);
     }
@@ -67,7 +69,7 @@ public class UserGroupController {
         ),
         @ApiResponse(
             responseCode = "404",
-            description = "User not found",
+            description = "User or session not found",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))
         )
     })
@@ -92,7 +94,7 @@ public class UserGroupController {
     })
     public ResponseEntity<List<GroupInfo>> listGroups(
             @Parameter(description = "Session ID") @RequestParam String sessionId,
-            @Parameter(description = "Group name pattern filter") @RequestParam(required = false) String pattern) {
+            @Parameter(description = "Group name pattern filter (supports * wildcard)") @RequestParam(required = false) String pattern) {
         List<GroupInfo> groups = userGroupService.listGroups(sessionId, pattern);
         return ResponseEntity.ok(groups);
     }
@@ -148,7 +150,7 @@ public class UserGroupController {
         ),
         @ApiResponse(
             responseCode = "404",
-            description = "Group not found",
+            description = "Group or session not found",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))
         )
     })

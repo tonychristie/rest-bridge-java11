@@ -29,12 +29,4 @@ public class ErrorResponse {
                 .message(message)
                 .build();
     }
-
-    public static ErrorResponse of(String code, String message, String details) {
-        return ErrorResponse.builder()
-                .code(code)
-                .message(message)
-                .details(details)
-                .build();
-    }
 }

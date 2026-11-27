@@ -2,7 +2,11 @@ package com.spire.restbridge.service;
 
 import com.spire.restbridge.model.SessionInfo;
 import lombok.Data;
-import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.DefaultUriBuilderFactory;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Holds session state for a REST connection.
@@ -10,12 +14,13 @@ import org.springframework.web.reactive.function.client.WebClient;
 @Data
 public class RestSessionHolder {
 
-    private WebClient webClient;
+    private RestTemplate restTemplate;
+    private DefaultUriBuilderFactory uriBuilderFactory;
     private String repository;
-    private String username;
-    private String password;
-    private String endpoint;
     private SessionInfo sessionInfo;
-    private boolean dqlAvailable;
-    private Boolean dqlChecked;
+    private volatile boolean dqlAvailable;
+    private volatile Boolean dqlChecked;
+
+    /** Attribute metadata by type name, for this session only. */
+    private final Map<String, Map<String, AttrMeta>> attributeMetadata = new ConcurrentHashMap<>();
 }

@@ -17,7 +17,6 @@ import java.time.Instant;
 public class SessionInfo {
 
     private String sessionId;
-    private boolean connected;
     private String repository;
     private String user;
     private String endpoint;

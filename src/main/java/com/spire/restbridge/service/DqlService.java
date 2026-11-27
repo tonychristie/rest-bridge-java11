@@ -9,14 +9,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.client.RestClientResponseException;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Service for DQL operations via Documentum REST Services.
@@ -33,14 +33,15 @@ public class DqlService {
     private static final Logger log = LoggerFactory.getLogger(DqlService.class);
     private static final MediaType DOCUMENTUM_MEDIA_TYPE =
             MediaType.parseMediaType("application/vnd.emc.documentum+json");
-    private static final int DEFAULT_ITEMS_PER_PAGE = 100;
-    private static final int MAX_PAGES = 1000;
-    private static final int TIMEOUT_SECONDS = 30;
+    private static final int ITEMS_PER_PAGE = 100;
+    private static final Pattern STRING_LITERAL = Pattern.compile("'(?:[^']|'')*'");
 
     private final SessionService sessionService;
+    private final RestServicesClient client;
 
-    public DqlService(SessionService sessionService) {
+    public DqlService(SessionService sessionService, RestServicesClient client) {
         this.sessionService = sessionService;
+        this.client = client;
     }
 
     /**
@@ -75,15 +76,15 @@ public class DqlService {
 
         try {
             List<QueryResult.ColumnInfo> columns = new ArrayList<>();
-            List<Map<String, Object>> allRows = new ArrayList<>();
-            int itemsPerPage = request.getMaxRows() > 0 ? request.getMaxRows() : DEFAULT_ITEMS_PER_PAGE;
-            int page = 1;
-            boolean hasMore = true;
-            int pagesFetched = 0;
+            List<Map<String, Object>> rows = new ArrayList<>();
+            int maxRows = request.getMaxRows();
+            int page = request.getStartRow() / ITEMS_PER_PAGE + 1;
+            int skip = request.getStartRow() % ITEMS_PER_PAGE;
+            boolean hasMore = false;
 
-            while (hasMore && pagesFetched < MAX_PAGES) {
+            while (true) {
                 Map<String, Object> response = executeDqlRequest(
-                        session, request.getQuery(), itemsPerPage, page);
+                        session, request.getQuery(), ITEMS_PER_PAGE, page);
 
                 if (response == null) {
                     break;
@@ -94,45 +95,46 @@ public class DqlService {
                     columns = extractColumns(response);
                 }
 
-                // Add rows from this page
                 List<Map<String, Object>> pageRows = extractRows(response);
-                allRows.addAll(pageRows);
+                int index = skip;
+                while (index < pageRows.size() && rows.size() < maxRows) {
+                    rows.add(pageRows.get(index));
+                    index++;
+                }
+                boolean nextPage = RestServicesClient.hasNextPage(response);
 
-                // Check for more pages
-                hasMore = hasNextPage(response);
+                log.debug("Fetched page {}, rows so far: {}", page, rows.size());
+
+                if (rows.size() >= maxRows) {
+                    hasMore = index < pageRows.size() || nextPage;
+                    break;
+                }
+                if (!nextPage) {
+                    break;
+                }
                 page++;
-                pagesFetched++;
-
-                log.debug("Fetched page {}, rows so far: {}, hasMore: {}",
-                        pagesFetched, allRows.size(), hasMore);
-            }
-
-            if (pagesFetched >= MAX_PAGES) {
-                log.warn("Reached maximum page limit ({}) for query: {}",
-                        MAX_PAGES, request.getQuery());
+                skip = 0;
             }
 
             long executionTime = System.currentTimeMillis() - startTime;
-            log.debug("DQL query returned {} rows in {}ms (fetched {} pages)",
-                    allRows.size(), executionTime, pagesFetched);
+            log.debug("DQL query returned {} rows in {}ms", rows.size(), executionTime);
 
             return QueryResult.builder()
                     .columns(columns)
-                    .rows(allRows)
-                    .rowCount(allRows.size())
+                    .rows(rows)
+                    .rowCount(rows.size())
                     .hasMore(hasMore)
                     .executionTimeMs(executionTime)
                     .build();
 
-        } catch (WebClientResponseException e) {
-            // Check if DQL is disabled
-            if (e.getStatusCode().value() == 400 || e.getStatusCode().value() == 404) {
-                String body = e.getResponseBodyAsString().toLowerCase();
-                if (body.contains("dql") && (body.contains("disabled") || body.contains("not supported"))) {
-                    session.setDqlAvailable(false);
-                    session.setDqlChecked(true);
-                    throw new DqlNotAvailableException(e.getResponseBodyAsString());
-                }
+        } catch (RestClientResponseException e) {
+            if (isDqlRefusal(e)) {
+                session.setDqlAvailable(false);
+                session.setDqlChecked(true);
+                throw new DqlNotAvailableException(e.getResponseBodyAsString());
+            }
+            if (e.getRawStatusCode() == 400 || e.getRawStatusCode() == 404) {
+                String body = e.getResponseBodyAsString().toLowerCase(Locale.ROOT);
                 // Check for QueryResultItemView error (aggregate query indicator)
                 if (body.contains("queryresultitemview") ||
                     (body.contains("failed to instantiate") && body.contains("id=null"))) {
@@ -150,28 +152,47 @@ public class DqlService {
 
     /**
      * Check if DQL is available by executing a simple query.
+     * Only a refusal from REST Services marks DQL unavailable. Any other failure
+     * leaves the session unchecked, so the next DQL request checks again.
      */
     private void checkDqlAvailability(RestSessionHolder session) {
         log.debug("Checking DQL availability for session");
 
         try {
-            // Try a simple query to check availability
-            Map<String, Object> response = executeDqlRequest(
-                    session, "SELECT r_object_id FROM dm_docbase_config", 1, 1);
+            executeDqlRequest(session, "SELECT r_object_id FROM dm_docbase_config", 1, 1);
 
-            session.setDqlAvailable(response != null);
+            session.setDqlAvailable(true);
             session.setDqlChecked(true);
-            log.info("DQL is {} for this session", session.isDqlAvailable() ? "available" : "not available");
+            log.info("DQL is available for this session");
 
-        } catch (WebClientResponseException e) {
+        } catch (RestClientResponseException e) {
+            if (!isDqlRefusal(e)) {
+                throw new DqlException("DQL availability check failed: " + e.getResponseBodyAsString(), e);
+            }
             session.setDqlAvailable(false);
             session.setDqlChecked(true);
             log.info("DQL is not available: {}", e.getResponseBodyAsString());
         } catch (Exception e) {
-            session.setDqlAvailable(false);
-            session.setDqlChecked(true);
-            log.info("DQL is not available: {}", e.getMessage());
+            throw new DqlException("DQL availability check failed: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * True when REST Services refuses DQL for the user (403 E_DQL_QUERY_FAILED)
+     * or reports DQL as disabled.
+     */
+    private boolean isDqlRefusal(RestClientResponseException e) {
+        int status = e.getRawStatusCode();
+        String body = e.getResponseBodyAsString();
+        if (status == 403) {
+            return body.contains("E_DQL_QUERY_FAILED");
+        }
+        if (status == 400 || status == 404) {
+            String lowerBody = body.toLowerCase(Locale.ROOT);
+            return lowerBody.contains("dql")
+                    && (lowerBody.contains("disabled") || lowerBody.contains("not supported"));
+        }
+        return false;
     }
 
     /**
@@ -187,26 +208,18 @@ public class DqlService {
         return session.isDqlAvailable();
     }
 
-    @SuppressWarnings("unchecked")
     private Map<String, Object> executeDqlRequest(
             RestSessionHolder session,
             String query,
             int itemsPerPage,
             int page) {
 
-        WebClient webClient = session.getWebClient();
-
-        return webClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/repositories/{repo}")
-                        .queryParam("dql", query)
-                        .queryParam("items-per-page", itemsPerPage)
-                        .queryParam("page", page)
-                        .build(session.getRepository()))
-                .accept(DOCUMENTUM_MEDIA_TYPE)
-                .retrieve()
-                .bodyToMono(Map.class)
-                .block(Duration.ofSeconds(TIMEOUT_SECONDS));
+        return client.get(session, DOCUMENTUM_MEDIA_TYPE, uriBuilder -> uriBuilder
+                .path("/repositories/{repo}")
+                .queryParam("dql", "{dql}")
+                .queryParam("items-per-page", itemsPerPage)
+                .queryParam("page", page)
+                .build(Map.of("repo", session.getRepository(), "dql", query)));
     }
 
     @SuppressWarnings("unchecked")
@@ -229,10 +242,10 @@ public class DqlService {
             return columns;
         }
 
-        for (String key : properties.keySet()) {
-            Object value = properties.get(key);
+        for (Map.Entry<String, Object> property : properties.entrySet()) {
+            Object value = property.getValue();
             columns.add(QueryResult.ColumnInfo.builder()
-                    .name(key)
+                    .name(property.getKey())
                     .type(inferType(value))
                     .length(0)
                     .repeating(value instanceof List)
@@ -263,16 +276,6 @@ public class DqlService {
         }
 
         return rows;
-    }
-
-    @SuppressWarnings("unchecked")
-    private boolean hasNextPage(Map<String, Object> response) {
-        List<Map<String, Object>> links = (List<Map<String, Object>>) response.get("links");
-        if (links == null) {
-            return false;
-        }
-        return links.stream()
-                .anyMatch(link -> "next".equals(link.get("rel")));
     }
 
     private String inferType(Object value) {
@@ -313,7 +316,7 @@ public class DqlService {
             return false;
         }
 
-        String upperQuery = query.toUpperCase().trim();
+        String upperQuery = outerQueryText(query).toUpperCase(Locale.ROOT).trim();
 
         // GROUP BY is the clearest indicator of an aggregate query
         if (upperQuery.contains("GROUP BY")) {
@@ -337,5 +340,32 @@ public class DqlService {
         }
 
         return false;
+    }
+
+    /**
+     * Empties every string literal, then removes the content of every parenthesis
+     * and keeps the parentheses, so COUNT(*) still reads as COUNT( and a subquery
+     * leaves nothing behind. Literals go first because they can hold a parenthesis.
+     */
+    private String outerQueryText(String query) {
+        String withoutLiterals = STRING_LITERAL.matcher(query).replaceAll("''");
+        StringBuilder outer = new StringBuilder(withoutLiterals.length());
+        int depth = 0;
+        for (char c : withoutLiterals.toCharArray()) {
+            if (c == '(') {
+                if (depth == 0) {
+                    outer.append(c);
+                }
+                depth++;
+            } else if (c == ')' && depth > 0) {
+                depth--;
+                if (depth == 0) {
+                    outer.append(c);
+                }
+            } else if (depth == 0) {
+                outer.append(c);
+            }
+        }
+        return outer.toString();
     }
 }

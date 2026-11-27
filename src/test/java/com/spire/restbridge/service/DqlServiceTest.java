@@ -2,13 +2,28 @@ package com.spire.restbridge.service;
 
 import com.spire.restbridge.dto.DqlRequest;
 import com.spire.restbridge.exception.AggregateQueryNotSupportedException;
+import com.spire.restbridge.exception.DqlException;
+import com.spire.restbridge.exception.DqlNotAvailableException;
 import com.spire.restbridge.exception.SessionNotFoundException;
+import com.spire.restbridge.model.QueryResult;
+import okhttp3.mockwebserver.Dispatcher;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.springframework.http.HttpStatus;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -26,7 +41,7 @@ class DqlServiceTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-        dqlService = new DqlService(sessionService);
+        dqlService = new DqlService(sessionService, new RestServicesClient());
     }
 
     @Test
@@ -51,6 +66,363 @@ class DqlServiceTest {
         assertThrows(SessionNotFoundException.class, () -> {
             dqlService.isDqlAvailable("invalid-session");
         });
+    }
+
+    @Test
+    void executeQuery_queryBadRequest_throwsDqlExceptionWithBadRequest() throws Exception {
+        assertEquals(HttpStatus.BAD_REQUEST, queryStatus(400));
+    }
+
+    @Test
+    void executeQuery_queryServerError_throwsDqlExceptionWithBadGateway() throws Exception {
+        assertEquals(HttpStatus.BAD_GATEWAY, queryStatus(500));
+    }
+
+    @Test
+    void executeQuery_queryUnknownStatus_throwsDqlExceptionWithBadGateway() throws Exception {
+        assertEquals(HttpStatus.BAD_GATEWAY, queryStatus(520));
+    }
+
+    @Test
+    void executeQuery_checkRefused_throwsNotAvailableAndDoesNotCheckAgain() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(dqlRefusal());
+            server.start();
+            mockSession(server);
+
+            assertThrows(DqlNotAvailableException.class, () -> dqlService.executeQuery(queryRequest()));
+            assertThrows(DqlNotAvailableException.class, () -> dqlService.executeQuery(queryRequest()));
+            assertEquals(1, server.getRequestCount());
+        }
+    }
+
+    @Test
+    void executeQuery_checkServerError_throwsDqlExceptionAndChecksAgainOnNextQuery() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(500));
+            server.enqueue(jsonResponse("{}"));
+            server.enqueue(jsonResponse("{\"entries\": [{\"content\": {\"properties\": "
+                    + "{\"r_object_id\": \"0901234567890001\"}}}]}"));
+            server.start();
+            mockSession(server);
+
+            assertThrows(DqlException.class, () -> dqlService.executeQuery(queryRequest()));
+
+            QueryResult result = dqlService.executeQuery(queryRequest());
+            assertEquals(1, result.getRowCount());
+            assertEquals("0901234567890001", result.getRows().get(0).get("r_object_id"));
+            assertEquals(3, server.getRequestCount());
+        }
+    }
+
+    @Test
+    void executeQuery_queryRefused_throwsNotAvailable() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{}"));
+            server.enqueue(dqlRefusal());
+            server.start();
+            mockSession(server);
+
+            assertThrows(DqlNotAvailableException.class, () -> dqlService.executeQuery(queryRequest()));
+        }
+    }
+
+    @Test
+    void isDqlAvailable_checkSucceeds_returnsTrueAndDoesNotCheckAgain() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{}"));
+            server.start();
+            mockSession(server);
+
+            assertTrue(dqlService.isDqlAvailable("session-1"));
+            assertTrue(dqlService.isDqlAvailable("session-1"));
+            assertEquals(1, server.getRequestCount());
+        }
+    }
+
+    @Test
+    void isDqlAvailable_checkRefused_returnsFalse() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(dqlRefusal());
+            server.start();
+            mockSession(server);
+
+            assertFalse(dqlService.isDqlAvailable("session-1"));
+        }
+    }
+
+    @Test
+    void executeQuery_serverSideAggregateError_throwsAggregateQueryNotSupported() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{}"));
+            server.enqueue(jsonResponse("{\"status\": 400, \"code\": \"E_INPUT_ILLEGAL_ARGUMENTS\", "
+                    + "\"message\": \"Cannot build QueryResultItemView for the result.\"}")
+                    .setResponseCode(400));
+            server.start();
+            mockSession(server);
+
+            assertThrows(AggregateQueryNotSupportedException.class,
+                    () -> dqlService.executeQuery(queryRequest()));
+            assertEquals(2, server.getRequestCount());
+        }
+    }
+
+    @Test
+    void executeQuery_takesColumnTypesFromFirstRow() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{}"));
+            server.enqueue(jsonResponse("{\"entries\": ["
+                    + "{\"content\": {\"properties\": {\"r_object_id\": \"0901234567890001\","
+                    + " \"r_content_size\": 42, \"a_is_template\": true, \"keywords\": [\"alpha\", \"beta\"]}}},"
+                    + "{\"content\": {\"properties\": {\"r_object_id\": \"0901234567890002\","
+                    + " \"r_content_size\": \"n/a\", \"a_is_template\": \"n/a\", \"keywords\": \"n/a\"}}}]}"));
+            server.start();
+            mockSession(server);
+
+            QueryResult result = dqlService.executeQuery(queryRequest());
+
+            assertEquals(4, result.getColumns().size());
+            assertEquals("INTEGER", column(result, "r_content_size").getType());
+            assertEquals("BOOLEAN", column(result, "a_is_template").getType());
+            QueryResult.ColumnInfo keywords = column(result, "keywords");
+            assertEquals("STRING", keywords.getType());
+            assertTrue(keywords.isRepeating());
+            assertFalse(column(result, "r_object_id").isRepeating());
+        }
+    }
+
+    @Test
+    void executeQuery_queryWithPlus_sendsPlusEncoded() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{}"));
+            server.enqueue(jsonResponse("{}"));
+            server.start();
+            mockSession(server);
+
+            dqlService.executeQuery(queryRequest("SELECT r_object_id FROM dm_document WHERE 1+1=2"));
+
+            server.takeRequest();
+            assertTrue(server.takeRequest().getPath().contains("dql=SELECT%20r_object_id%20FROM%20dm_document"
+                    + "%20WHERE%201%2B1%3D2&"));
+        }
+    }
+
+    @Test
+    void executeQuery_queryWithBraces_sendsBracesEncodedAndReturnsRows() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{}"));
+            server.enqueue(jsonResponse("{\"entries\": [{\"content\": {\"properties\": "
+                    + "{\"r_object_id\": \"0901234567890001\"}}}]}"));
+            server.start();
+            mockSession(server);
+
+            QueryResult result = dqlService.executeQuery(
+                    queryRequest("SELECT r_object_id FROM dm_document WHERE object_name = '{x}'"));
+
+            server.takeRequest();
+            assertTrue(server.takeRequest().getPath().contains("%27%7Bx%7D%27"));
+            assertEquals(1, result.getRowCount());
+            assertEquals("0901234567890001", result.getRows().get(0).get("r_object_id"));
+        }
+    }
+
+    @Test
+    void executeQuery_turkishDefaultLocale_sendsCountWithObjectId() throws Exception {
+        Locale previous = Locale.getDefault();
+        Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{}"));
+            server.enqueue(jsonResponse("{}"));
+            server.start();
+            mockSession(server);
+
+            dqlService.executeQuery(queryRequest("select r_object_id, count(*) from dm_document"));
+
+            assertEquals(2, server.getRequestCount());
+        } finally {
+            Locale.setDefault(previous);
+        }
+    }
+
+    @Test
+    void executeQuery_turkishDefaultLocale_serverSideAggregateError_throwsAggregateQueryNotSupported()
+            throws Exception {
+        Locale previous = Locale.getDefault();
+        Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{}"));
+            server.enqueue(jsonResponse("{\"status\": 400, \"code\": \"E_INPUT_ILLEGAL_ARGUMENTS\", "
+                    + "\"message\": \"Cannot build QueryResultItemView for the result.\"}")
+                    .setResponseCode(400));
+            server.start();
+            mockSession(server);
+
+            AggregateQueryNotSupportedException ex = assertThrows(AggregateQueryNotSupportedException.class,
+                    () -> dqlService.executeQuery(queryRequest()));
+            assertEquals("AGGREGATE_QUERY_NOT_SUPPORTED", ex.getCode());
+        } finally {
+            Locale.setDefault(previous);
+        }
+    }
+
+    @Test
+    void executeQuery_turkishDefaultLocale_dqlDisabled_throwsNotAvailableAndDoesNotCheckAgain()
+            throws Exception {
+        Locale previous = Locale.getDefault();
+        Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(jsonResponse("{\"status\": 400, \"message\": \"DQL IS DISABLED\"}")
+                    .setResponseCode(400));
+            server.start();
+            mockSession(server);
+
+            DqlNotAvailableException ex = assertThrows(DqlNotAvailableException.class,
+                    () -> dqlService.executeQuery(queryRequest()));
+            assertEquals("DQL_NOT_AVAILABLE", ex.getCode());
+            assertThrows(DqlNotAvailableException.class, () -> dqlService.executeQuery(queryRequest()));
+            assertEquals(1, server.getRequestCount());
+        } finally {
+            Locale.setDefault(previous);
+        }
+    }
+
+    private static QueryResult.ColumnInfo column(QueryResult result, String name) {
+        return result.getColumns().stream()
+                .filter(column -> name.equals(column.getName()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("No column " + name));
+    }
+
+    @Test
+    void executeQuery_noMaxRowsOrStartRow_returnsFirstHundredRowsFromOnePage() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            List<Integer> pagesRead = serveRows(server, 250);
+            mockSession(server);
+
+            QueryResult result = dqlService.executeQuery(DqlRequest.builder()
+                    .sessionId("session-1").query("SELECT r_object_id FROM dm_document").build());
+
+            assertEquals(rowNumbers(1, 100), rowNumbersOf(result));
+            assertTrue(result.isHasMore());
+            assertEquals(List.of(1), pagesRead);
+        }
+    }
+
+    @Test
+    void executeQuery_maxRowsFiveFromRowThree_returnsRowsFourToEight() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            serveRows(server, 250);
+            mockSession(server);
+
+            QueryResult result = dqlService.executeQuery(DqlRequest.builder()
+                    .sessionId("session-1").query("SELECT r_object_id FROM dm_document")
+                    .maxRows(5).startRow(3).build());
+
+            assertEquals(rowNumbers(4, 8), rowNumbersOf(result));
+            assertTrue(result.isHasMore());
+        }
+    }
+
+    @Test
+    void executeQuery_startRowInSecondPage_readsLastTwoPagesAndHasNoMore() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            List<Integer> pagesRead = serveRows(server, 250);
+            mockSession(server);
+
+            QueryResult result = dqlService.executeQuery(DqlRequest.builder()
+                    .sessionId("session-1").query("SELECT r_object_id FROM dm_document")
+                    .maxRows(100).startRow(150).build());
+
+            assertEquals(rowNumbers(151, 250), rowNumbersOf(result));
+            assertFalse(result.isHasMore());
+            assertEquals(List.of(2, 3), pagesRead);
+        }
+    }
+
+    /**
+     * Serves the availability check, then a result of {@code total} rows in pages of 100.
+     * Row n has the property row = n. Returns the query pages read, in order.
+     */
+    private static List<Integer> serveRows(MockWebServer server, int total) throws IOException {
+        List<Integer> pagesRead = new CopyOnWriteArrayList<>();
+        server.setDispatcher(new Dispatcher() {
+            @Override
+            public MockResponse dispatch(RecordedRequest request) {
+                if (request.getRequestUrl().queryParameter("dql").contains("dm_docbase_config")) {
+                    return jsonResponse("{}");
+                }
+                int itemsPerPage = Integer.parseInt(request.getRequestUrl().queryParameter("items-per-page"));
+                int page = Integer.parseInt(request.getRequestUrl().queryParameter("page"));
+                pagesRead.add(page);
+                int first = (page - 1) * itemsPerPage + 1;
+                int last = Math.min(page * itemsPerPage, total);
+                String entries = IntStream.rangeClosed(first, last)
+                        .mapToObj(n -> "{\"content\": {\"properties\": {\"row\": " + n + "}}}")
+                        .collect(Collectors.joining(","));
+                String links = last < total ? ", \"links\": [{\"rel\": \"next\", \"href\": \"next-page\"}]" : "";
+                return jsonResponse("{\"entries\": [" + entries + "]" + links + "}");
+            }
+        });
+        server.start();
+        return pagesRead;
+    }
+
+    private static List<Integer> rowNumbers(int first, int last) {
+        return IntStream.rangeClosed(first, last).boxed().collect(Collectors.toList());
+    }
+
+    private static List<Integer> rowNumbersOf(QueryResult result) {
+        return result.getRows().stream().map(row -> (Integer) row.get("row")).collect(Collectors.toList());
+    }
+
+    private void mockSession(MockWebServer server) {
+        RestSessionHolder session = SessionService.createSessionHolder(server.url("/").toString(),
+                "test01", "secret", 30);
+        session.setRepository("testrepo");
+        when(sessionService.getSession("session-1")).thenReturn(session);
+    }
+
+    private static DqlRequest queryRequest() {
+        return queryRequest("SELECT r_object_id FROM dm_document");
+    }
+
+    private static DqlRequest queryRequest(String query) {
+        DqlRequest request = new DqlRequest();
+        request.setSessionId("session-1");
+        request.setQuery(query);
+        return request;
+    }
+
+    private static MockResponse jsonResponse(String body) {
+        return new MockResponse().setHeader("Content-Type", "application/json").setBody(body);
+    }
+
+    private static MockResponse dqlRefusal() {
+        return jsonResponse("{\"status\": 403, \"code\": \"E_DQL_QUERY_FAILED\", "
+                + "\"message\": \"Query failed.\", \"details\": \"Query Execution not allowed\"}")
+                .setResponseCode(403);
+    }
+
+    private HttpStatus queryStatus(int upstreamStatus) throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody("{}"));
+            server.enqueue(new MockResponse().setResponseCode(upstreamStatus)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"code\": \"E_INVALID_QUERY_ERROR\"}"));
+            server.start();
+            RestSessionHolder session = SessionService.createSessionHolder(server.url("/").toString(),
+                    "test01", "secret", 30);
+            session.setRepository("testrepo");
+            when(sessionService.getSession("session-1")).thenReturn(session);
+
+            DqlRequest request = new DqlRequest();
+            request.setSessionId("session-1");
+            request.setQuery("SELECT r_object_id FROM no_such_type");
+
+            DqlException ex = assertThrows(DqlException.class, () -> dqlService.executeQuery(request));
+            assertEquals(2, server.getRequestCount());
+            return ex.getStatus();
+        }
     }
 
     @ParameterizedTest
@@ -82,7 +454,9 @@ class DqlServiceTest {
         "SELECT r_object_id, object_name FROM dm_document",
         "SELECT r_object_id, r_object_type FROM dm_sysobject WHERE r_object_type = 'dm_document'",
         "SELECT * FROM dm_document WHERE folder('/Temp')",
-        "SELECT r_object_id, object_name, r_modify_date FROM dm_document ORDER BY r_modify_date DESC"
+        "SELECT r_object_id, object_name, r_modify_date FROM dm_document ORDER BY r_modify_date DESC",
+        "SELECT r_object_id FROM dm_folder WHERE object_name = 'GROUP BY'",
+        "SELECT r_object_id FROM dm_document WHERE owner_name IN (SELECT user_name FROM dm_user GROUP BY user_name)"
     })
     void executeQuery_normalQuery_doesNotThrowAggregateException(String query) {
         // These queries should pass the aggregate check and only fail later
